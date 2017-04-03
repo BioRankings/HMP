@@ -8,9 +8,13 @@ CHANGES
 
 * kullbackLieber was renamed to Kullback.Leibler.  kullbackLieber now just calls Kullback.Leibler.
 
-* Added Plot.Abundance and Plot.MLE to plot data
+* Added Plot.Abundance and Plot.MDS to plot data
+
+* Added Est.PI to estimate the pi vector and plot it with error bars
 
 * Added Get.Diversities to calculate several diversity measures for a data set
+
+* Changed data.filter to allow for percentage based filtering
 
 
 BUG FIXES

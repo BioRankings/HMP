@@ -22,8 +22,8 @@ MC.Xdc.statistics.Test <- function(){
 	fit.tonsils <- DM.MoM(tonsils)
 	
 	### Set up the number of Monte-Carlo experiments
-	### We use 1 for speed, should be around 10,000
-	numTests <- 100
+	### We use 1 for speed, should be at least 1,000
+	numMC <- 1
 	
 	### Generate the number of reads per sample
 	### The first number is the number of reads and the second is the number of subjects
@@ -34,12 +34,12 @@ MC.Xdc.statistics.Test <- function(){
 	
 	### Computing size of the test statistics (Type I error)
 	alphap <- fit.saliva$gamma
-	pval1 <- MC.Xdc.statistics(group.Nrs, numTests, alphap, "hnull")
+	pval1 <- MC.Xdc.statistics(group.Nrs, numMC, alphap, "hnull")
 	pval1
 	
 	### Computing Power of the test statistics (Type II error)
 	alphap <- rbind(fit.saliva$gamma, fit.throat$gamma, fit.tonsils$gamma)
-	pval2 <- MC.Xdc.statistics(group.Nrs, numTests, alphap)
+	pval2 <- MC.Xdc.statistics(group.Nrs, numMC, alphap)
 	pval2
 }
 
@@ -54,10 +54,10 @@ MC.Xoc.statistics.Test <- function(){
 	fit.tonsils <- DM.MoM(tonsils)
 	
 	### Set up the number of Monte-Carlo experiments
-	### We use 1 for speed, should be around 10,000
-	numTests <- 1
+	### We use 1 for speed, should be at least 1,000
+	numMC <- 1
 	
-	### Generate a the number of reads per sample
+	### Generate the number of reads per sample
 	### The first number is the number of reads and the second is the number of subjects
 	nrsGrp1 <- rep(12000, 9)
 	nrsGrp2 <- rep(12000, 11)
@@ -66,13 +66,13 @@ MC.Xoc.statistics.Test <- function(){
 	
 	### Computing size of the test statistics (Type I error)
 	alphap <- fit.tonsils$gamma
-	pval1 <- MC.Xoc.statistics(group.Nrs, numTests, alphap, "hnull")
+	pval1 <- MC.Xoc.statistics(group.Nrs, numMC, alphap, "hnull")
 	pval1
 	
 	\dontrun{
 		### Computing Power of the test statistics (Type II error)
 		alphap <- rbind(fit.saliva$gamma, fit.throat$gamma, fit.tonsils$gamma)
-		pval2 <- MC.Xoc.statistics(group.Nrs, numTests, alphap, "ha")
+		pval2 <- MC.Xoc.statistics(group.Nrs, numMC, alphap, "ha")
 		pval2
 	}
 }
@@ -88,10 +88,10 @@ MC.Xmc.statistics.Test <- function(){
 	fit.tonsils <- DM.MoM(tonsils) 
 	
 	### Set up the number of Monte-Carlo experiments
-	### We use 1 for speed, should be around 10,000
-	numTests <- 1 
+	### We use 1 for speed, should be at least 1,000
+	numMC <- 1 
 	
-	### Generate a the number of reads per sample
+	### Generate the number of reads per sample
 	### The first number is the number of reads and the second is the number of subjects
 	nrsGrp1 <- rep(12000, 9)
 	nrsGrp2 <- rep(12000, 11)
@@ -101,12 +101,12 @@ MC.Xmc.statistics.Test <- function(){
 	pi0 <- fit.saliva$pi
 	
 	### Computing size of the test statistics (Type I error)
-	pval1 <- MC.Xmc.statistics(group.Nrs, numTests, pi0, group.theta=group.theta, type="hnull")
+	pval1 <- MC.Xmc.statistics(group.Nrs, numMC, pi0, group.theta=group.theta, type="hnull")
 	pval1
 	
 	### Computing Power of the test statistics (Type II error)
 	group.pi <- rbind(fit.throat$pi, fit.tonsils$pi)
-	pval2 <- MC.Xmc.statistics(group.Nrs, numTests, pi0, group.pi, group.theta, "ha")
+	pval2 <- MC.Xmc.statistics(group.Nrs, numMC, pi0, group.pi, group.theta, "ha")
 	pval2
 }
 
@@ -121,10 +121,10 @@ MC.Xmcupo.statistics.Test <- function(){
 	fit.tonsils <- DM.MoM(tonsils) 
 	
 	### Set up the number of Monte-Carlo experiments
-	### We use 1 for speed, should be around 10,000
-	numTests <- 1
+	### We use 1 for speed, should be at least 1,000
+	numMC <- 1
 	
-	### Generate a the number of reads per sample
+	### Generate the number of reads per sample
 	### The first number is the number of reads and the second is the number of subjects
 	Nrs1 <- rep(12000, 10)
 	Nrs2 <- rep(12000, 19)
@@ -135,12 +135,12 @@ MC.Xmcupo.statistics.Test <- function(){
 	
 	### Computing size of the test statistics (Type I error)
 	group.theta <- c(fit.throat$theta, fit.tonsils$theta)
-	pval1 <- MC.Xmcupo.statistics(group.Nrs, numTests, pi0, group.theta=group.theta, type="hnull")
+	pval1 <- MC.Xmcupo.statistics(group.Nrs, numMC, pi0, group.theta=group.theta, type="hnull")
 	pval1
 	
 	### Computing Power of the test statistics (Type II error)
 	group.pi <- rbind(fit.throat$pi, fit.tonsils$pi)
-	pval2 <- MC.Xmcupo.statistics(group.Nrs, numTests, pi0, group.pi, group.theta)
+	pval2 <- MC.Xmcupo.statistics(group.Nrs, numMC, pi0, group.pi, group.theta)
 	pval2
 }
 
@@ -155,19 +155,19 @@ MC.Xsc.statistics.Test <- function(){
 	fit.tonsils <- DM.MoM(tonsils) 
 	
 	### Set up the number of Monte-Carlo experiments
-	### We use 1 for speed, should be around 10,000
-	numTests <- 1
+	### We use 1 for speed, should be at least 1,000
+	numMC <- 1
 	
-	### Generate a the number of reads per sample
+	### Generate the number of reads per sample
 	### The first number is the number of reads and the second is the number of subjects
 	nrs <- rep(15000, 25)
 	
 	### Computing size of the test statistics (Type I error)
-	pval1 <- MC.Xsc.statistics(nrs, numTests, fit.tonsils, fit.saliva$pi, "hnull")
+	pval1 <- MC.Xsc.statistics(nrs, numMC, fit.tonsils, fit.saliva$pi, "hnull")
 	pval1
 	
 	### Computing Power of the test statistics (Type II error)
-	pval2 <- MC.Xsc.statistics(nrs, numTests, fit.throat, fit.tonsils$pi)
+	pval2 <- MC.Xsc.statistics(nrs, numMC, fit.throat, fit.tonsils$pi)
 	pval2
 }
 
@@ -178,19 +178,19 @@ MC.ZT.statistics.Test <- function(){
 	fit.saliva <- DM.MoM(saliva) 
 	
 	### Set up the number of Monte-Carlo experiments
-	### We use 1 for speed, should be around 10,000
-	numTests <- 1
+	### We use 1 for speed, should be at least 1,000
+	numMC <- 1
 	
-	### Generate a the number of reads per sample
+	### Generate the number of reads per sample
 	### The first number is the number of reads and the second is the number of subjects
 	nrs <- rep(15000, 25)
 	
 	### Computing size of the test statistics (Type I error)
-	pval1 <- MC.ZT.statistics(nrs, numTests, fit.saliva, "hnull") 
+	pval1 <- MC.ZT.statistics(nrs, numMC, fit.saliva, "hnull") 
 	pval1
 	
 	### Computing Power of the test statistics (Type II error)
-	pval2 <- MC.ZT.statistics(nrs, numTests, fit.saliva)
+	pval2 <- MC.ZT.statistics(nrs, numMC, fit.saliva)
 	pval2
 }
 
@@ -215,7 +215,7 @@ Plot.Abundance.Test <- function(){
 	Plot.Abundance(group.data)
 }
 
-Plot.MLE.Test <- function(){
+Est.PI.Test <- function(){
 	data(saliva)
 	data(throat)
 	data(tonsils)
@@ -223,8 +223,26 @@ Plot.MLE.Test <- function(){
 	### Combine the data sets into a single list
 	group.data <- list(saliva, throat, tonsils)
 	
-	Plot.MLE(group.data)
+	\dontrun{
+		### Get and plot PI using MLE
+		mle <- Est.PI(group.data)
+		
+		### Get and plot PI using MoM
+		mom <- Est.PI(group.data, FALSE)
+	}
 }
+
+Plot.MDS.Test <- function(){
+	data(saliva)
+	data(throat)
+	data(tonsils)
+	
+	### Combine the data sets into a single list
+	group.data <- list(saliva, throat, tonsils)
+	
+	Plot.MDS(group.data)
+}
+
 
 
 
@@ -297,11 +315,17 @@ Data.filter.Test <- function(){
 	data(saliva) 
 	
 	### Excludes all samples with fewer than 1000 reads and collapses
-	### taxas with 11th or smaller abundance into one category 
-	filterData <- Data.filter(saliva, "data", 1000, 10) 
+	### taxa with 11th or smaller abundance into one category 
+	filterDataNum <- Data.filter(saliva, "data", 1000, 10) 
+	
+	### Excludes all samples with fewer than 1000 reads and collapses
+	### the least abundant taxa to keep as close to 85% of the data as
+	### possible
+	filterDataPer <- Data.filter(saliva, "data", 1000, perTaxa=.99) 
 	
 	dim(saliva)
-	dim(filterData)
+	dim(filterDataNum)
+	dim(filterDataPer)
 }
 
 formatDataSets.Test <- function(){
@@ -316,7 +340,7 @@ formatDataSets.Test <- function(){
 	group.data <- list(saliva2, throat2)
 	
 	formattedData <- formatDataSets(group.data)
-	formattedData[[1]][1:5,1:5]
+	formattedData[[1]][1:5, 1:5]
 }
 
 
@@ -331,7 +355,7 @@ Dirichlet.multinomial.Test <- function(){
 	### The first number is the number of reads and the second is the number of subjects
 	nrs <- rep(15000, 20) 
 	
-	### ### Get gamma from the dirichlet-multinomial parameters
+	### Get gamma from the dirichlet-multinomial parameters
 	shape <- dirmult(saliva)$gamma
 	
 	dmData <- Dirichlet.multinomial(nrs, shape)
@@ -339,7 +363,7 @@ Dirichlet.multinomial.Test <- function(){
 }
 
 Multinomial.Test <- function(){
-	### Generate a random vector of number of reads per sample
+	### Generate the number of reads per sample
 	### The first number is the number of reads and the second is the number of subjects
 	nrs <- rep(15000, 25)
 	
@@ -400,8 +424,10 @@ Xoc.sevsample.Test <- function(){
 	### Combine the data sets into a single list
 	group.data <- list(saliva, tonsils)
 	
-	xoc <- Xoc.sevsample(group.data)
-	xoc 
+	\dontrun{
+		xoc <- Xoc.sevsample(group.data)
+		xoc
+	}
 }
 
 Xsc.onesample.Test <- function(){

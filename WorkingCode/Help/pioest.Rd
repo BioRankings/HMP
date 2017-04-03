@@ -18,8 +18,9 @@
 	data(saliva)
 	data(throat)
 
-	mygroup <- list(saliva, throat)
+	### Combine the data sets into a single list
+	group.data <- list(saliva, throat)
 	
-	pio <- pioest(mygroup)
+	pio <- pioest(group.data)
 	pio
 }
