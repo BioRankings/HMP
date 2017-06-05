@@ -1,11 +1,18 @@
 
 
 library(dirmult)	# example code functions and dirmult, equalTheta functions
+library(ggplot2)	# pretty plots for pi
+library(doParallel) # parallelizing 
 library(MASS)		# ginv function for Xsc.statistics
-library(doParallel) # parallelizing KL calc
-library(gplots)		# KL heatmap
-library(ggplot2)	# pretty plot
-library(vegan) 		# shannon/simpson diversity
+library(vegan) 		# ga distances
+library(gplots)		# heatmap plots
+library(rpart)		# base rpart
+library(rattle)		# fancy rpart plotting
+
+
+### Define a global environment to use with rpart
+hmp.pkg.env <- new.env(parent=emptyenv())
+hmp.pkg.env$EVAL_COUNT_RPART <- 1
 
 
 ### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -15,7 +22,6 @@ library(vegan) 		# shannon/simpson diversity
 ### ~~~~~~~~~~~~~~~~~~~~~
 ### Generation functions
 ### ~~~~~~~~~~~~~~~~~~~~~
-# reviewed 9/29/16
 Multinomial <- function(Nrs, probs){
 	if(missing(Nrs) || missing(probs))
 		stop("Nrs and/or probs missing.")
@@ -32,7 +38,6 @@ Multinomial <- function(Nrs, probs){
 	return(mData)
 }
 
-# reviewed 9/29/16
 Dirichlet.multinomial <- function(Nrs, shape){
 	if(missing(Nrs) || missing(shape))
 		stop("Nrs and/or shape missing.")
@@ -54,7 +59,6 @@ Dirichlet.multinomial <- function(Nrs, shape){
 ### ~~~~~~~~~~~~~~~~~~~~~
 ### Other functions
 ### ~~~~~~~~~~~~~~~~~~~~~
-# reviewed 9/29/16
 C.alpha.multinomial <- function(data){
 	if(missing(data))
 		stop("data missing.")
@@ -76,11 +80,9 @@ C.alpha.multinomial <- function(data){
 	return(GoF.test)
 }
 
-# reviewed 9/30/16 
 DM.MoM <- function(data){
 	if(missing(data))
 		stop("data missing.")
-	
 	
 	pi.MoM <- colSums(data)/sum(data)
 	theta.MoM <- weirMoM(data, pi.MoM)$theta
@@ -98,46 +100,7 @@ DM.MoM <- function(data){
 	return(fit.MoM)
 }
 
-# reviewed 9/30/16
-pioest <- function(group.data){
-	if(missing(group.data))
-		stop("data.groups missing.")
-	
-	# Check every data set has the same number of taxa
-	taxaCounts <- sapply(group.data, ncol)
-	numTaxa	<- taxaCounts[1]
-	if(any(taxaCounts != numTaxa))
-		stop("Every data set must have matching taxa, including pi0")
-	
-	numGroups <- length(group.data)
-	
-	# Pull out pi and calculate xsc
-	pis <- matrix(0, numTaxa, numGroups)
-	xscs <- rep(0, numGroups)
-	for(i in 1:numGroups){
-		tempData <- group.data[[i]]
-		
-		numReadsSubs <- rowSums(tempData)
-		totalReads <- sum(tempData)
-		pi <- colSums(tempData)/totalReads
-		theta <- weirMoM(tempData, pi)$theta
-		
-		xscs[i] <- (theta * (sum(numReadsSubs^2)-totalReads) + totalReads) / totalReads^2
-		pis[,i] <- pi
-	}
-	
-	# Remove any 0 taxa
-	pis <- pis[rowSums(pis)!=0,]
-	
-	# Calculate pi0
-	pi0 <- rowSums(pis/xscs)/sum(1/xscs)
-	
-	names(pi0) <- colnames(group.data[[1]])
-	
-	return(pi0)
-}
-
-Kullback.Leibler <- function(group.data, plot=TRUE, parallel=FALSE, cores=3){
+Kullback.Leibler <- function(group.data, plot=TRUE, main="Kullback Leibler Divergences", parallel=FALSE, cores=3){
 	if(missing(group.data))
 		stop("data missing.")
 	
@@ -146,11 +109,13 @@ Kullback.Leibler <- function(group.data, plot=TRUE, parallel=FALSE, cores=3){
 	if(numGrps < 2)
 		stop("At least 2 data sets are required.")
 	
-	# Check every data set has the same number of taxa
+	# Make sure we have the same columns
 	taxaCounts <- sapply(group.data, ncol)
 	numTaxa	<- taxaCounts[1]
-	if(any(taxaCounts != numTaxa))
-		stop("Every data set must have matching taxa.")
+	if(any(taxaCounts != numTaxa)){
+		warning("Group columns do not match, running formatDataSets.")
+		group.data <- formatDataSets(group.data)
+	}
 	
 	# Make sure we have group names
 	if(is.null(names(group.data))){
@@ -159,109 +124,74 @@ Kullback.Leibler <- function(group.data, plot=TRUE, parallel=FALSE, cores=3){
 		grpNames <- names(group.data)
 	}
 	
-	group.data <- lapply(group.data, function(x) x+1)  # Add 1 so we don't ever get an all 0 comparison
+	# Add 1 so we don't ever get an all 0 comparison
+	group.data <- lapply(group.data, function(x) x+1)  
 	
+	# Run dirmult on every group
 	if(parallel){
 		cl <- parallel::makeCluster(min(cores, numGrps)) 
 		doParallel::registerDoParallel(cl)
 		
-		results <- foreach::foreach(i=1:numGrps, .combine=list, .multicombine=TRUE, .inorder=TRUE, .packages=c("dirmult")) %dopar%{
-			mle.param <- dirmult::dirmult(group.data[[i]], trace=FALSE)
-			return(mle.param)
-		}
-		parallel::stopCluster(cl)
+		tryCatch({
+					results <- foreach::foreach(i=1:numGrps, .combine=list, .multicombine=TRUE, .inorder=TRUE, .packages=c("dirmult")) %dopar%{
+						mle.param <- dirmult::dirmult(group.data[[i]], trace=FALSE)
+						return(mle.param)
+					}
+				}, finally = {
+					# Close the parallel connections
+					parallel::stopCluster(cl)
+				}
+		)
 	}else{
 		results <- vector("list", numGrps)
 		for(i in 1:numGrps)	
 			results[[i]] <- dirmult::dirmult(group.data[[i]], trace=FALSE)
 	}
 	
+	# Get alpha for every group
 	alpha <- lapply(results, function(x) x$gamma)
 	names(alpha) <- grpNames
-	LL.list <- mapply(function(x, y) loglikDM(x, y), x=group.data, y=alpha)
 	
-	KLmat <- matrix(0, numGrps, numGrps)
+	# Get LL given another alpha
+	LL.vals <- mapply(function(x, y) loglikDM(x, y), x=group.data, y=alpha)
+	
+	# Get LL for every group using another alpha
+	KLmat <- matrix(0, numGrps, numGrps)		
 	for(i in 1:numGrps){
-		for(j in 1:numGrps){
-			ll <- loglikDM(group.data[[i]], alpha[[j]])
-			KLmat[i, j] <- LL.list[i]- ll
+		for(j in i:numGrps){
+			if(i == j)
+				next
+			KLval1 <- LL.vals[i] - loglikDM(group.data[[i]], alpha[[j]])
+			KLval2 <- LL.vals[j] - loglikDM(group.data[[j]], alpha[[i]])
+			KLmat[i, j] <- KLval1 + KLval2
+			KLmat[j, i] <- KLval1 + KLval2
 		}
-	} 
+	}
 	colnames(KLmat) <- grpNames
 	rownames(KLmat) <- grpNames
 	
 	if(plot){
-		KLdist <- dist(KLmat, method="euclidean")
-		
-		gplots::heatmap.2(as.matrix(KLdist), dendrogram="both", Rowv=TRUE, Colv=TRUE, trace="none", symm=FALSE,
-				main="Kullback-Leibler Divergences", margins=c(12,9), density.info="none")
+		gplots::heatmap.2(as.matrix(KLmat), dendrogram="both", Rowv=TRUE, Colv=TRUE, 
+				trace="none", symm=TRUE, margins=c(12, 9), density.info="none",
+				main=main
+		)
 	}
 	
 	return(KLmat)
 }
 
-Get.Diversities <- function(data){
-	if(missing(data))
-		stop("data is missing.")
-	
-	# Get base diversities
-	numTaxa <- ncol(data)
-	numSamps <- nrow(data)
-	
-	shan <- apply(data, 1, function(x) vegan::diversity(x, "shannon"))
-	shanSD <- stats::sd(shan)
-	shanDI <- mean(shan)
-	
-	simp <- apply(data, 1, function(x) vegan::diversity(x, "simpson"))
-	simpSD <- stats::sd(simp)
-	simpDI <- mean(simp)
-	
-	# Get confidence on those diversities
-	CI <- 1.96*(shanSD/sqrt(numSamps))
-	shanCI <- c(shanDI - CI, shanDI + CI)
-	CI <- 1.96*(simpSD/sqrt(numSamps))
-	simpCI <- c(simpDI - CI, simpDI + CI)
-	
-	# Get effective diversities
-	shanEff <- exp(shan)
-	shanSD <- stats::sd(shanEff)
-	shanEffDI <- mean(shanEff)
-	
-	simpEff <- 1/(1-simp)
-	simpSD <- stats::sd(simpEff)
-	simpEffDI <- mean(simpEff)
-	
-	# Get confidence on effective diversities
-	CI <- 1.96*(shanSD/sqrt(numSamps))
-	shanEffCI <- c(shanEffDI - CI, shanEffDI + CI)
-	CI <- 1.96*(simpSD/sqrt(numSamps))
-	simpEffCI <- c(simpEffDI - CI, simpEffDI + CI)
-	
-	# Build table to return
-	res <- data.frame(matrix(0, 3, 6))
-	colnames(res) <- c("Value", "Lower CI", "Upper CI", "Eff Value", "Lower Eff CI", "Upper Eff CI")
-	rownames(res) <- c("Richness", "Shannon", "Simpson")
-	res[,1] <- c(numTaxa, shanDI, simpDI)
-	res[,2] <- c(numTaxa, shanCI[1], simpCI[1])
-	res[,3] <- c(numTaxa, shanCI[2], simpCI[2])
-	res[,4] <- c(numTaxa, shanEffDI, simpEffDI)
-	res[,5] <- c(numTaxa, shanEffCI[1], simpEffCI[1])
-	res[,6] <- c(numTaxa, shanEffCI[2], simpEffCI[2])
-	
-	return(res)
-}
-
-# reviewed 9/30/16 & 10/6/16
-# changed mod cramer 
 Xmcupo.effectsize <- function(group.data){
 	if(missing(group.data))
 		stop("group.data missing.")
 	
-	# Check every data set has the same number of taxa
+	# Make sure we have the same columns
 	taxaCounts <- sapply(group.data, ncol)
 	numTaxa	<- taxaCounts[1]
-	if(any(taxaCounts != numTaxa))
-		stop("Every data set must have matching taxa")
+	if(any(taxaCounts != numTaxa)){
+		warning("Group columns do not match, running formatDataSets.")
+		group.data <- formatDataSets(group.data)
+		numTaxa <- ncol(group.data[[1]])
+	}
 	
 	numGroups <- length(group.data)
 	totalReads <- sum(sapply(group.data, sum))
@@ -304,12 +234,553 @@ Xmcupo.effectsize <- function(group.data){
 	return(result)
 }
 
+Est.PI <- function(group.data, conf=.95){
+	if(missing(group.data))
+		stop("group.data is missing.")
+	
+	# Check the number of groups
+	numGroups <- length(group.data)
+	
+	# Make sure we have the same columns
+	taxaCounts <- sapply(group.data, ncol)
+	numTaxa	<- taxaCounts[1]
+	if(any(taxaCounts != numTaxa)){
+		warning("Group columns do not match, running formatDataSets.")
+		group.data <- formatDataSets(group.data)
+	}
+	
+	# Make sure we have group names
+	if(is.null(names(group.data))){
+		grpNames <- paste("Data Set", 1:numGroups)
+	}else{
+		grpNames <- names(group.data)
+	}
+	
+	# Calculate the pi and error bars for each group
+	allParamsMLE <- data.frame(matrix(0, 0, 6))
+	allParamsMOM <- data.frame(matrix(0, 0, 6))
+	thetaMLE <- data.frame(matrix(0, numGroups, 3))
+	thetaMOM <- data.frame(matrix(0, numGroups, 3))
+	for(i in 1:numGroups){
+		tempData <- group.data[[i]]
+		tempParam1 <- data.frame(matrix(0, ncol(tempData), 6))
+		tempParam2 <- data.frame(matrix(0, ncol(tempData), 6))
+		
+		# Check for taxa with 0 column sums (add 1 to everything if this happens)
+		badTaxa <- which(colSums(tempData) == 0)
+		if(length(badTaxa) != 0)
+			tempData <- tempData + 1
+		
+		# Get the MoM and MLE for every taxa
+		fsum <- dirmult::dirmult.summary(tempData, dirmult::dirmult(tempData, trace=FALSE))
+		tempTheta <- fsum[nrow(fsum),]
+		fsum <- fsum[-nrow(fsum),] 
+		
+		# Turn the summary into a data frame we can plot from
+		tempParam1[,1] <- rownames(fsum)
+		tempParam1[,2] <- grpNames[i]
+		tempParam1[,3] <- fsum$MLE
+		tempParam1[,4] <- fsum$se.MLE
+		tempTheta1 <- tempTheta[,2:3]
+		
+		tempParam2[,1] <- rownames(fsum)
+		tempParam2[,2] <- grpNames[i]
+		tempParam2[,3] <- fsum$MoM
+		tempParam2[,4] <- fsum$se.MOM
+		tempTheta2 <- tempTheta[,4:5]
+		
+		# Calc Upper and Lower bounds for CI
+		minSubj <- min(sapply(group.data, function(x) nrow(x)))
+		if(minSubj < 30){
+			val <- stats::qt(0.5 + conf *0.5, df=minSubj-1)
+		}else{
+			val <- stats::qnorm(0.5 + conf*0.5)
+		}
+		
+		tempParam1[,5] <- tempParam1[,3] + val*tempParam1[,4]
+		tempParam1[,6] <- tempParam1[,3] - val*tempParam1[,4]
+		
+		tempParam2[,5] <- tempParam2[,3] + val*tempParam2[,4]
+		tempParam2[,6] <- tempParam2[,3] - val*tempParam2[,4]
+		
+		# Save outside of loop
+		allParamsMLE <- rbind(allParamsMLE, tempParam1)
+		thetaMLE[i,] <- c(grpNames[i], tempTheta1)
+		
+		allParamsMOM <- rbind(allParamsMOM, tempParam2)
+		thetaMOM[i,] <- c(grpNames[i], tempTheta2)
+	}
+	colnames(allParamsMLE) <- c("Taxa", "Group", "PI", "SE", "Upper", "Lower")
+	colnames(thetaMLE) <- c("Group", colnames(tempTheta1))
+	colnames(allParamsMOM) <- c("Taxa", "Group", "PI", "SE", "Upper", "Lower")
+	colnames(thetaMOM) <- c("Group", colnames(tempTheta2))
+	
+	# Make sure none of our error bars go over 100 or below 0
+	allParamsMLE$Upper <- ifelse(allParamsMLE$Upper > 1, 1, allParamsMLE$Upper)
+	allParamsMLE$Lower <- ifelse(allParamsMLE$Lower < 0, 0, allParamsMLE$Lower)
+	allParamsMOM$Upper <- ifelse(allParamsMOM$Upper > 1, 1, allParamsMOM$Upper)
+	allParamsMOM$Lower <- ifelse(allParamsMOM$Lower < 0, 0, allParamsMOM$Lower)
+	
+	# Factor the data so it stays in the right order
+	allParamsMLE$Group <- factor(allParamsMLE$Group, levels=grpNames)
+	allParamsMLE$Taxa <- factor(allParamsMLE$Taxa, levels=unique(colnames(group.data[[1]])))
+	allParamsMOM$Group <- factor(allParamsMOM$Group, levels=grpNames)
+	allParamsMOM$Taxa <- factor(allParamsMOM$Taxa, levels=unique(colnames(group.data[[1]])))
+	
+	MLE <- list(params=allParamsMLE, theta=thetaMLE)
+	MOM <- list(params=allParamsMOM, theta=thetaMOM)
+	
+	return(list(MLE=MLE, MOM=MOM))
+}
+
+Test.Paired <- function(group.data, numPerms=1000, parallel=FALSE, cores=3){
+	if(missing(group.data))
+		stop("group.data is missing.")
+	
+	if(length(group.data) != 2)
+		stop("group.data must have exactly 2 data sets.")
+	
+	if(numPerms <= 0)
+		stop("The number of permutations must be an integer greater than 0.")
+	
+	# Make sure we have the same columns
+	if(ncol(group.data[[1]]) != ncol(group.data[[2]])){
+		warning("Group columns do not match, running formatDataSets.")
+		group.data <- formatDataSets(group.data)
+	}
+	
+	# Check they have the same number of subjects
+	numSub <- nrow(group.data[[1]])
+	if(numSub != nrow(group.data[[2]]))
+		stop("Groups must have the same number of subjects.")
+	
+	# Check row names match
+	rNames1 <- rownames(group.data[[1]])
+	rNames2 <- rownames(group.data[[2]])
+	if(!all(rNames1 == rNames2)){ # check names in the same order
+		if(all(rNames1 %in% rNames2)){ # check names match in wrong order
+			group.data[[1]] <- group.data[[1]][order(rNames1),]
+			group.data[[2]] <- group.data[[2]][order(rNames2),]
+		}else{
+			warning("Subject names do not match, assuming data is ordered correctly.")
+		}
+	}
+	
+	# Turn into abundances
+	group.data[[1]] <- group.data[[1]]/rowSums(group.data[[1]])
+	group.data[[2]] <- group.data[[2]]/rowSums(group.data[[2]])
+	
+	# Merge data1 and data2 together
+	dataComb <- rbind(group.data[[1]], group.data[[2]])
+	
+	# Get the differences between the groups
+	dataDiff <- group.data[[1]] - group.data[[2]]
+	meanDiff <- apply(dataDiff, 2, mean)
+	
+	# Calculate the sum of squares
+	obsDiff <- sum(meanDiff^2)
+	
+	# Permute the group membership
+	if(parallel){
+		cl <- parallel::makeCluster(cores) 
+		doParallel::registerDoParallel(cl)
+		
+		tryCatch({ 
+					permDiffs <- foreach::foreach(i=1:numPerms, .combine=c, .inorder=FALSE, .multicombine=TRUE) %dopar%{
+						# Randomly swap group membership by reverseing difference sign
+						swaps <- sample(c(1, -1), numSub, replace=TRUE)
+						dataDiffTemp <- dataDiff * swaps
+						meanDiffTemp <- apply(dataDiffTemp, 2, mean)
+						
+						# Calculate the sum of squares
+						obsDiffTemp <- sum(meanDiffTemp^2)
+						
+						return(obsDiffTemp)
+					}	
+				}, finally = {
+					# Close the parallel connections
+					parallel::stopCluster(cl)
+				}
+		)
+	}else{
+		permDiffs <- rep(0, numPerms)
+		for(i in 1:numPerms){ 	
+			# Randomly swap group membership by reverseing difference sign
+			swaps <- sample(c(1, -1), numSub, replace=TRUE)
+			dataDiffTemp <- dataDiff * swaps
+			meanDiffTemp <- apply(dataDiffTemp, 2, mean)
+			
+			# Calculate the sum of squares
+			permDiffs[i] <- sum(meanDiffTemp^2)
+		}
+	}	
+	
+	# Calculate pvalue
+	pval <- (sum(permDiffs >= obsDiff) + 1)/(numPerms + 1)
+	
+	return(pval)
+}
+
+DM.Rpart <- function(data, covars, plot=TRUE, main="", minsplit=1, minbucket=1, cp=0){
+	if(missing(data) || missing(covars))
+		stop("data and/or covars are missing.")
+	
+	# Set the methods to use and call rpart
+	methods <- list(init=rpartInit, eval=rpartEval, split=rpartSplit)
+	res <- rpart::rpart(as.matrix(data) ~., data=covars, method=methods, minsplit=minsplit, minbucket=minbucket, cp=cp)
+	
+	# Plot the rpart results
+	if(plot)
+		suppressWarnings(rattle::fancyRpartPlot(res, main=main, sub=NULL))
+	
+	return(res)
+}
+
+DM.Rpart.Perm <- function(data, covars, plot=TRUE, numPerms=1000, parallel=FALSE, cores=3, bestTreeCriteria=.05, minsplit=1, minbucket=1){
+	if(missing(data) || missing(covars))
+		stop("data and/or covars are missing.")
+	
+	if(numPerms <= 0)
+		stop("The number of permutations must be an integer greater than 0.")
+	
+	if(bestTreeCriteria <= 0 || bestTreeCriteria > 1)
+		stop("bestTreeCriteria must be greater than 0 and equal or less than 1")
+	
+	numSub <- nrow(data) 
+	methods <- list(init=rpartInit, eval=rpartEval, split=rpartSplit)
+	
+	# Run our base rpart
+	res <- DM.Rpart(data, covars, FALSE, minsplit, minbucket)
+	# Prune the tree back
+	rawResults <- pruneRpart(res, data, "Raw")
+	
+	### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+	# Run permutations
+	if(parallel){
+		cl <- parallel::makeCluster(min(cores, numPerms)) 
+		doParallel::registerDoParallel(cl)
+		tryCatch({ 
+					rpartPermRes <- foreach::foreach(i=1:numPerms, .combine=rbind, .multicombine=TRUE, .inorder=FALSE, .packages=c("rpart", "HMP")) %dopar%{
+						# Randomize subject order                      
+						permData <- data[sample(numSub, numSub),, drop=FALSE]
+						# Run full tree on permuted data
+						resPerm <- rpart::rpart(as.matrix(permData) ~., data=covars, method=methods, minsplit=minsplit, minbucket=minbucket, cp=0)
+						# Prune the tree back
+						tempResults <- pruneRpart(resPerm, permData, i)
+						
+						return(tempResults)
+					}
+				}, finally = {
+					# Close the parallel connections
+					parallel::stopCluster(cl)
+				}
+		)
+	}else{
+		rpartPermRes <- matrix(0, 0, 4)
+		for(i in 1:numPerms){
+			# Randomize subject order  
+			permData <- data[sample(numSub, numSub),, drop=FALSE]
+			# Run full tree on permuted data
+			resPerm <- rpart::rpart(as.matrix(permData) ~., data=covars, method=methods, minsplit=minsplit, minbucket=minbucket, cp=0)
+			# Prune the tree back
+			tempResults <- pruneRpart(resPerm, permData, i)
+			
+			rpartPermRes <- rbind(rpartPermRes, tempResults)
+		}
+	}
+	
+	# Combine perms with real data
+	allData <- rbind(rawResults, rpartPermRes)
+	rownames(allData) <- 1:nrow(allData)
+	
+	# Plot the permutations vs the real data
+	if(plot){
+		par(mar=c(5,4,4,5)+.1)
+		
+		# Make the inital plot
+		plot(rawResults$Leafs, rawResults$WDist, type="b", main="# of Leaves vs Within Group Distance", 
+				lwd=2, xlab="Number of Terminal Nodes", ylab="Log of Within Group Distance", 
+				ylim=range(allData$WDist, na.rm=TRUE, finite=TRUE), xlim=range(allData$Leafs, na.rm=TRUE, finite=TRUE))
+		# Add all permutation results
+		for(i in 1:numPerms){
+			tempData <- rpartPermRes[rpartPermRes$Tree == unique(rpartPermRes$Tree)[i],]
+			lines(tempData$Leafs, tempData$WDist, col="red", lty=2)
+		}
+		# Redraw original line
+		lines(rawResults$Leafs, rawResults$WDist, col="black", type="b", pch=16, lwd=3)
+	}
+	
+	# Approx values for permuted trees based on our real tree
+	treeNames <- levels(rpartPermRes$Tree)
+	pvalData <- matrix(NA, nrow(rawResults), numPerms)
+	colnames(pvalData) <- treeNames
+	for(i in 1:numPerms){
+		id <- which(rpartPermRes$Tree == treeNames[i])
+		if(length(id) <= 1) # Skip any 1 node trees
+			next
+		pvalData[,i] <- stats::approx(rpartPermRes$Leafs[id], rpartPermRes$WDist[id], rawResults$Leafs)$y
+	}
+	
+	# Calculate P-value
+	pval <- rowMeans(rawResults$WDist >= pvalData, na.rm=TRUE)
+	pval <- ifelse(is.na(pval), 0, pval)
+	rawResults <- cbind(rawResults, pval)
+	
+	# Prune with best CP
+	ids <- which(pval <= bestTreeCriteria)
+	if(length(ids) > 0){
+		bestId <- max(ids)
+	}else{
+		bestId <- 1
+	}
+	bestRes <- rpart::prune(res, cp=rawResults[bestId, 2])
+	
+	ret <- list(rawTree=res, bestTree=bestRes, rawPrune=rawResults, permPrune=rpartPermRes, pvals=pval)
+	return(ret)
+}
+
+Gen.Alg <- function(data, covars, iters=50, popSize=200, earlyStop=0, dataDist="euclidean", covarDist="gower", verbose=FALSE, plot=TRUE){
+	if(missing(data) || missing(covars))
+		stop("data and/or covars are missing.")
+	
+	if(iters <= 0)
+		stop("iters must be an integer greater than 0")
+	if(popSize <= 0)
+		stop("popSize must be an integer greater than 0")
+	if(earlyStop < 0)
+		stop("earlyStop must be an integer greater than or equal to 0")
+	
+	if(dataDist != "euclidean" && dataDist != "gower")
+		stop("data.dist must be euclidean or gower.")
+	if(covarDist != "euclidean" && covarDist != "gower")
+		stop("covars.dist must be euclidean or gower.")
+	
+	if(verbose){
+		print("X. Current Step : Current Time Taken")
+		runningTime <- proc.time()
+	}
+	
+	# Value for making sure the scoring function result is: best = highest
+	REV_SCORE <- -1
+	
+	# Scoring function
+	scoring <- function(indices, covarDists, colDists, distType, REV_SCORE) {
+		if(sum(indices) == 0)
+			return(0)
+		
+		edges <- which(indices==1)
+		
+		# Combine the distance matrices based on distance type
+		if(distType == "gower"){
+			combinedSolDists <- Reduce("+", colDists[edges])/sum(indices)
+		}else{
+			combinedSolDists <- sqrt(Reduce("+", colDists[edges]))
+		}
+		
+		# Get the correlation and penalize it based on the number of columns selected
+		mycor <- stats::cor(combinedSolDists, covarDists)
+#		if(USE_PENALTY)
+#			mycor <- mycor * (length(indices)-sum(indices))/(length(indices)-1)
+		
+		return(mycor * REV_SCORE)
+	}
+	
+	if(verbose)
+		print(paste("1. Calculating Distances:", round((proc.time() - runningTime)[3], 3)))
+	
+	# Set up our base distance matrix
+	covarDists <- vegan::vegdist(covars, covarDist)
+	
+	# Get each columns distance contribution
+	colDists <- vector("list", ncol(data))
+	for(i in 1:ncol(data))
+		colDists[[i]] <- vegan::vegdist(data[,i], dataDist)
+	
+	if(dataDist == "euclidean")
+		colDists <- lapply(colDists, function(x) x^2)
+	
+	# Define our evolution controls
+	size <- ncol(data)
+	mutationChance <- 1/(size+1)
+	elitism <- floor(popSize/5)
+	zeroToOneRatio <- 10
+	
+	if(verbose)
+		print(paste("2. Creating Starting Data:", round((proc.time() - runningTime)[3], 3)))
+	
+	# Create population
+	population <- matrix(NA, popSize, size)
+	
+	# Make 10 starting points as long as our popSize is > 10
+	suggestionCount <- 10
+	if(popSize >= suggestionCount){
+		# Get a rough starting point
+		rstart <- apply(data, 2, sd)/apply(data, 2, mean)
+		
+		# Use the rough difference to make starting solutions
+		breaks <- seq(.05, 1, .1)
+		suggestions <- matrix(0, length(breaks), length(rstart))
+		for(i in 1:length(breaks))
+			suggestions[i,] <- ifelse(rstart >= quantile(rstart, breaks[i]), 1, 0)
+		
+		population[1:suggestionCount,] <- suggestions
+	}else{
+		suggestionCount <- 0
+	}
+	
+	# Fill any remaining population spots with random solutions
+	if(popSize != suggestionCount){
+		for(child in (suggestionCount+1):popSize) 
+			population[child,] <- sample(c(rep(0, zeroToOneRatio), 1), size, replace=TRUE)
+	}
+	
+	# Define some variables for use in the GA loop
+	evalSumm <- matrix(NA, iters, 6)
+	newPopSize <- popSize - elitism
+	newPopulation <- matrix(NA, newPopSize, size)
+	parentProb <- stats::dnorm(1:popSize, mean=0, sd=(popSize/3))
+	
+	if(verbose)
+		print(paste("3. Scoring Starting Data:", round((proc.time() - runningTime)[3], 3)))
+	
+	# Score and sort
+	evalVals <- rep(NA, popSize)
+	for(e in 1:popSize)
+		evalVals[e] <- scoring(population[e,], covarDists, colDists, dataDist, REV_SCORE)
+	population <- population[order(evalVals),]
+	bestScoreValue <- min(evalVals)
+	bestScoreCounter <- 0
+	
+	if(verbose)
+		print(paste("4. Running Iterations:", round((proc.time() - runningTime)[3], 3)))
+	
+	# Run GA
+	ptr <- proc.time()
+	for(i in 1:iters){
+		if(verbose){
+			if(i %% round(iters/10) == 0)
+				print(paste("Iteration - ", i, ": ", round((proc.time() - runningTime)[3], 3), sep=""))
+		}
+		# Cross over to fill rest of new population
+		for(child in 1:newPopSize){
+			parentIDs <- sample(1:popSize, 2, prob=parentProb)
+			parents <- population[parentIDs,]
+			crossOverPoint <- sample(0:size, 1)
+			if(crossOverPoint == 0){
+				newPopulation[child,] <- parents[2,]
+			}else if(crossOverPoint == size){
+				newPopulation[child,] <- parents[1,]
+			}else{
+				newPopulation[child,] <- c(parents[1,][1:crossOverPoint], parents[2,][(crossOverPoint+1):size])
+			}
+		}
+		
+		# Mutate all but elite
+		if(mutationChance > 0){
+			population[(elitism+1):popSize,] <- apply(newPopulation, 2, function(x){ifelse(stats::runif(newPopSize) < mutationChance, 1-x, x)})
+		}else{
+			population[(elitism+1):popSize,] <- newPopulation
+		}
+		
+		# Score and sort our new solutions
+		for(e in 1:popSize)
+			evalVals[e] <- scoring(population[e,], covarDists, colDists, dataDist, REV_SCORE)
+		population <- population[order(evalVals),]
+		evalSumm[i,] <- summary(evalVals)
+		
+		# Check if we want to stop early
+		if(bestScoreValue == min(evalVals)){
+			bestScoreCounter <- bestScoreCounter + 1
+		}else{
+			bestScoreCounter <- 0
+			bestScoreValue <- min(evalVals)
+		}
+		
+		if(bestScoreCounter == earlyStop && earlyStop != 0)
+			break
+	}	
+	gaTime <- (proc.time() - ptr)[3]
+	
+	if(verbose)
+		print(paste("5. Prettying Results", round((proc.time() - runningTime)[3], 3)))
+	
+	# Pretty up our data for returning
+	rownames(population) <- paste("Solution", 1:nrow(population))
+	colnames(population) <- colnames(data)
+	rownames(evalSumm) <- paste("Iteration", 1:nrow(evalSumm))
+	colnames(evalSumm) <- c("Best", "25%ile", "Median", "Mean", "75%ile", "Worst")
+	
+	evalVals <- matrix(evalVals[order(evalVals)], 1, length(evalVals))
+	colnames(evalVals) <- paste("Solution ", 1:length(evalVals))
+	rownames(evalVals) <- "Score"
+	
+	# Adjust scoring values back if REV_SCORE changed it
+	gaEvalSumms <- evalSumm * REV_SCORE
+	gaPopulation <- population
+	gaEvals <- evalVals * REV_SCORE
+	
+	# Get selected columns using a consensus
+	selIndex <- which(population[1,] == 1)
+	sel <- colnames(data)[selIndex]
+	
+	# Get the nonselected columns
+	nonSel <- colnames(data)[-selIndex]
+	
+	# Plot scoring summary
+	if(plot){
+		plot(gaEvalSumms[,4], type="l", ylab="Score", ylim=c(0, 1), lwd=2, main="Eval Scores by Iteration", xlab="Iteration")
+		lines(gaEvalSumms[,6], col="red", lwd=2)
+		lines(gaEvalSumms[,1], col="blue", lwd=2)
+		legend("topleft", colnames(gaEvalSumms)[c(4, 6, 1)], pch=16, col=c("black", "red", "blue"))
+	}
+	
+	return(list(scoreSumm=gaEvalSumms, solutions=gaPopulation, scores=gaEvals, time=gaTime, selected=sel, nonSelected=nonSel, selectedIndex=selIndex))
+}
+
+Gen.Alg.Consensus <- function(data, covars, consensus=.5, numRuns=10, parallel=FALSE, cores=3, ...){
+	if(missing(data) || missing(covars))
+		stop("data and/or covars are missing.")
+	
+	if(consensus <= 0 || consensus > 1)
+		stop("consensus must be greater than 0 and equal or less than 1")
+	
+	# Run the GA X times
+	if(parallel){
+		cl <- parallel::makeCluster(min(cores, numRuns)) 
+		doParallel::registerDoParallel(cl)
+		
+		tryCatch({
+					gaRes <- foreach::foreach(i=1:numRuns, .combine=list, .multicombine=TRUE, .inorder=FALSE, .packages=c("cluster", "vegan")) %dopar%{
+						tempResults <- Gen.Alg(data, covars, plot=FALSE, verbose=FALSE, ...)
+						return(tempResults)
+					}
+				}, finally = {
+					# Close the parallel connections
+					parallel::stopCluster(cl)
+				}
+		)
+	}else{
+		gaRes <- vector("list", numRuns)
+		for(i in 1:numRuns)
+			gaRes[[i]] <- Gen.Alg(data, covars, plot=FALSE, verbose=FALSE, ...)
+	}
+	
+	# Get all the best solutions
+	bestSols <- sapply(gaRes, function(x){x$solutions[1,]})
+	
+	# Get the consensus solution vector
+	consSol <- (rowSums(bestSols) >= (numRuns * consensus)) * 1
+	
+	# Get the selected Index's
+	selInd <- which(consSol == 1)
+	
+	return(list(solutions=bestSols, consSol=consSol, selectedIndex=selInd))
+}
 
 
 ### ~~~~~~~~~~~~~~~~~~~~~
 ### Plot functions
 ### ~~~~~~~~~~~~~~~~~~~~~
-# reviewed 9/30/16
 Barchart.data <- function(data, title="Taxa Proportions"){
 	if(missing(data))
 		stop("data missing.")
@@ -320,147 +791,32 @@ Barchart.data <- function(data, title="Taxa Proportions"){
 			main=title, axisnames=FALSE, font.main=20, font.sub=16)
 }
 
-Est.PI <- function(group.data, useMLE=TRUE, main=NULL, plot=TRUE){
-	if(missing(group.data))
-		stop("group.data is missing.")
+Plot.PI <- function(estPi, errorBars=TRUE, logScale=FALSE, main="PI Vector", ylab="Fractional Abundance"){
+	if(missing(estPi))
+		stop("estPi is missing.")
 	
-	if(is.null(main)){
-		if(useMLE){
-			main <- "PI Vectors: Using MLE"
-		}else{
-			main <- "PI Vectors: Using MoM"
-		}
-	}
+	# Move title to the middle
+	ggplot2::theme_update(plot.title=ggplot2::element_text(hjust=0.5))
 	
-	# Check the number of groups
-	numGroups <- length(group.data)
+	# Make the base plot
+	piPlot <- ggplot2::ggplot(estPi$params, ggplot2::aes_string(y="PI", x="Taxa", colour="Group")) +
+			ggplot2::geom_point() + 
+			ggplot2::theme(legend.position = "top") +
+			ggplot2::labs(title=main, y=ylab, x="") +
+			ggplot2::theme(axis.text.x=ggplot2::element_text(hjust=1, angle=45, size=6))
 	
-	# Check every data set has the same number of taxa
-	taxaCounts <- sapply(group.data, ncol)
-	numTaxa	<- taxaCounts[1]
-	if(any(taxaCounts != numTaxa))
-		stop("Every data set must have matching taxa.")
-	
-	# Make sure we have group names
-	if(is.null(names(group.data))){
-		grpNames <- paste("Data Set", 1:numGroups)
+	# Add error bars
+	if(errorBars){
+		piPlot <- piPlot + ggplot2::geom_errorbar(ggplot2::aes_string(ymax="Upper", ymin="Lower"))
 	}else{
-		grpNames <- names(group.data)
+		piPlot <- piPlot + ggplot2::geom_line(ggplot2::aes_string(group="Group"))
 	}
 	
-	# Calculate the pi and error bars for each group
-	allParams <- data.frame(matrix(0, 0, 6))		
-	for(i in 1:numGroups){
-		# Pull out a single group and check for taxa with 0 column sums (add 1 to subject 1)
-		tempData <- group.data[[i]]
-		
-		badTaxa <- which(colSums(tempData) == 0)
-		if(length(badTaxa) != 0)
-			tempData[1, badTaxa] <- tempData[1, badTaxa] + 1
-		
-		tempParam <- data.frame(matrix(0, ncol(tempData), 6))
-		
-		# Get the MoM for every taxa
-		fsum <- dirmult::dirmult.summary(tempData, dirmult::dirmult(tempData, trace=FALSE))
-		fsum <- fsum[-nrow(fsum),]
-		
-		# Turn the summary into a data frame we can plot from
-		tempParam[,1] <- rownames(fsum)
-		tempParam[,2] <- grpNames[i]
-		
-		if(useMLE){
-			tempParam[,3] <- fsum$MLE
-			tempParam[,4] <- fsum$se.MLE
-			tempParam[,5] <- fsum$MLE + 1.96*fsum$se.MLE
-			tempParam[,6] <- fsum$MLE - 1.96*fsum$se.MLE
-		}else{
-			tempParam[,3] <- fsum$MoM
-			tempParam[,4] <- fsum$se.MOM
-			tempParam[,5] <- fsum$MoM + 1.96*fsum$se.MOM
-			tempParam[,6] <- fsum$MoM - 1.96*fsum$se.MOM
-		}
-		
-		allParams <- rbind(allParams, tempParam)
-	}
-	colnames(allParams) <- c("Taxa", "Group", "PI", "SE", "Upper", "Lower")
+	# Do log scaling
+	if(logScale)
+		piPlot <- piPlot + ggplot2::scale_y_log10()
 	
-	# Make sure none of our error bars go over 100 or below 0
-	allParams$Upper <- ifelse(allParams$Upper > 1, 1, allParams$Upper)
-	allParams$Lower <- ifelse(allParams$Lower < 0, 0, allParams$Lower)
-	
-	# Factor the data so it stays in the right order
-	allParams$Group <- factor(allParams$Group, levels=grpNames)
-	allParams$Taxa <- factor(allParams$Taxa, levels=unique(colnames(group.data[[1]])))
-	
-	if(plot){
-		print(ggplot2::ggplot(allParams, aes_string(y="PI", x="Taxa", colour="Group")) +
-						geom_point() + theme(legend.position = "top") +
-						geom_errorbar(aes_string(ymax="Upper", ymin="Lower")) +
-						labs(title=main, y="PI Vector", x="") +
-						theme(axis.text.x=element_text(hjust=1, angle=45, size=6)
-						)
-		)
-	}
-	
-	return(allParams)
-}
-
-Plot.Abundance <- function(group.data, main="Group Abundance"){
-	if(missing(group.data))
-		stop("group.data is missing.")
-	
-	# Check the number of groups
-	numGroups <- length(group.data)
-	
-	# Check every data set has the same number of taxa
-	taxaCounts <- sapply(group.data, ncol)
-	numTaxa	<- taxaCounts[1]
-	if(any(taxaCounts != numTaxa))
-		stop("Every data set must have matching taxa.")
-	
-	# Make sure we have group names
-	if(is.null(names(group.data))){
-		grpNames <- paste("Data Set", 1:numGroups)
-	}else{
-		grpNames <- names(group.data)
-	}
-	
-	# Calculate the percent abundance and error bars for each group
-	allParams <- data.frame(matrix(0, 0, 5))		
-	for(i in 1:numGroups){
-		# Pull out a single group and check for taxa with 0 column sums (add 1 to subject 1)
-		tempData <- group.data[[i]]
-		
-		badTaxa <- which(colSums(tempData) == 0)
-		if(length(badTaxa) != 0)
-			tempData[1, badTaxa] <- tempData[1, badTaxa] + 1
-		
-		tempParam <- data.frame(matrix(0, ncol(tempData), 5))
-		
-		# Get percent abundance for every taxa
-		tempData <- tempData/rowSums(tempData) * 100
-		
-		tempParam[,1] <- colnames(tempData)
-		tempParam[,2] <- grpNames[i]
-		tempParam[,3] <- apply(tempData, 2, mean)
-		tempParam[,4] <- apply(tempData, 2, max)
-		tempParam[,5] <- apply(tempData, 2, min)
-		
-		allParams <- rbind(allParams, tempParam)
-	}
-	colnames(allParams) <- c("Taxa", "Group", "Avg", "Max", "Min")
-	
-	# Factor the data so it stays in the right order
-	allParams$Group <- factor(allParams$Group, levels=grpNames)
-	allParams$Taxa <- factor(allParams$Taxa, levels=unique(colnames(group.data[[1]])))
-	
-	print(ggplot2::ggplot(allParams, aes_string(y="Avg", x="Taxa", colour="Group")) +
-					geom_point() + theme(legend.position = "top") +
-					geom_errorbar(aes_string(ymax="Max", ymin="Min")) +
-					labs(title=main, y="Percent Abundance", x="") +
-					theme(axis.text.x=element_text(hjust=1, angle=45, size=6)
-					)
-	)
+	print(piPlot)
 }
 
 Plot.MDS <- function(group.data, main="Group MDS", retCords=FALSE){
@@ -469,11 +825,13 @@ Plot.MDS <- function(group.data, main="Group MDS", retCords=FALSE){
 	
 	numGroups <- length(group.data)
 	
-	# Check every data set has the same number of taxa
+	# Make sure we have the same columns
 	taxaCounts <- sapply(group.data, ncol)
 	numTaxa	<- taxaCounts[1]
-	if(any(taxaCounts != numTaxa))
-		stop("Every data set must have matching taxa.")
+	if(any(taxaCounts != numTaxa)){
+		warning("Group columns do not match, running formatDataSets.")
+		group.data <- formatDataSets(group.data)
+	}
 	
 	# Make sure we have group names
 	if(is.null(names(group.data))){
@@ -503,6 +861,7 @@ Plot.MDS <- function(group.data, main="Group MDS", retCords=FALSE){
 }
 
 
+
 ### ~~~~~~~~~~~~~~~~~~~~~
 ### Filter functions
 ### ~~~~~~~~~~~~~~~~~~~~~
@@ -514,26 +873,43 @@ formatDataSets <- function(group.data, data=NULL){
 	if(!is.null(data) && missing(group.data))
 		group.data <- data
 	
+	# Make sure we have more than 1 data set
 	numGroups <- length(group.data)
 	if(numGroups < 2)
 		stop("At least 2 data sets are required.")
 	
+	# Merge all the data together
+	dataNames <- vector("list", numGroups)
 	newData <- NULL
 	for(i in 1:length(group.data)){		
+		tempData <- group.data[[i]]
+		
+		# Remove any all 0 subjects from the data
+		tempData <- tempData[rowSums(tempData) != 0,, drop=FALSE]
+		
+		# Save the current row names
+		dataNames[[i]] <- rownames(tempData)
+		
 		newData <- merge(newData, t(group.data[[i]]), by=0, all=TRUE)
 		rownames(newData) <- newData[,1]
 		newData <- newData[,-1]
 	}
+	
+	# Remove any nas
 	newData[is.na(newData)] <- 0
 	newData <- t(newData)
-	newData <- newData[,colSums(newData) != 0]
-	newData <- newData[rowSums(newData) != 0,]
+	
+	# Remove any all 0 columns and sort them
+	newData <- newData[,colSums(newData) != 0, drop=FALSE]
 	newData <- newData[,order(colSums(newData), decreasing=TRUE)]
 	
+	# Turn the data back into a list
 	retData <- vector("list", numGroups)
 	base <- 0
 	for(i in 1:numGroups){
 		retData[[i]] <- newData[(base+1):(nrow(group.data[[i]])+ base),]
+		rownames(retData[[i]]) <- dataNames[[i]]
+		
 		base <- base + nrow(group.data[[i]])
 	}
 	
@@ -587,7 +963,12 @@ Data.filter <- function(data, order.type="data", minReads=0, numTaxa=NULL, perTa
 	if(!is.null(perTaxa)){
 		perNumReadsTaxa <- colSums(data)/sum(data)
 		cumSumReads <- cumsum(perNumReadsTaxa)
-		numTaxa <- max(which(cumSumReads <= perTaxa))
+		taxaAboveThrs <- which(cumSumReads > perTaxa)
+		if(length(taxaAboveThrs) == 0){
+			numTaxa <- 1
+		}else{
+			numTaxa <- min(taxaAboveThrs)
+		}
 	}
 	
 	# Pull out the taxa we want to collapse
@@ -628,8 +1009,8 @@ MC.ZT.statistics <- function(Nrs, numMC=10, fit, type="ha", siglev=0.05, MC=NULL
 	qAlpha <- qchisq(p=(1-siglev), df=length(fit$pi)-1, ncp=0, lower.tail=TRUE)
 	
 	# Calculate our pvalues for z and t
-	zpval <- sum(z > qAlpha)/length(z)
-	tpval <- sum(t > qAlpha)/length(t)
+	zpval <- (sum(z > qAlpha) + 1)/(length(z) + 1)
+	tpval <- (sum(t > qAlpha) + 1)/(length(t) + 1)
 	
 	return(cbind(zpval, tpval))
 }
@@ -658,7 +1039,7 @@ MC.Xsc.statistics <- function(Nrs, numMC=10, fit, pi0=NULL, type="ha", siglev=0.
 	qAlpha <- qchisq(p=(1-siglev), df=length(fit$pi)-1, ncp=0, lower.tail=TRUE)
 	
 	# Calculate pvalues
-	pval <- sum(XscStatVector > qAlpha)/length(XscStatVector)
+	pval <- (sum(XscStatVector > qAlpha) + 1)/(length(XscStatVector) + 1)
 	
 	return(pval)
 }
@@ -702,7 +1083,7 @@ MC.Xmc.statistics <- function(group.Nrs, numMC=10, pi0, group.pi, group.theta, t
 	qAlpha <- qchisq(p=(1-siglev), df=length(group.theta)*(numTaxa-1), ncp=0, lower.tail=TRUE)
 	
 	# Calculate pvalues
-	pval <- sum(XmcStatVector > qAlpha)/length(XmcStatVector)
+	pval <- (sum(XmcStatVector > qAlpha) + 1)/(length(XmcStatVector) + 1)
 	
 	return(pval)
 }
@@ -749,7 +1130,7 @@ MC.Xmcupo.statistics <- function(group.Nrs, numMC=10, pi0, group.pi, group.theta
 	qAlpha <- qchisq(p=(1-siglev), df=length(group.theta)*(numTaxa-1), ncp=0, lower.tail=TRUE)
 	
 	# Calculate pvalues
-	pval <- sum(XmcupoStatVector > qAlpha)/length(XmcupoStatVector)
+	pval <- (sum(XmcupoStatVector > qAlpha) + 1)/(length(XmcupoStatVector) + 1)
 	
 	return(pval)
 }
@@ -787,7 +1168,7 @@ MC.Xdc.statistics <- function(group.Nrs, numMC=10, alphap, type="ha", siglev=0.0
 	qAlpha <- qchisq(p=(1-siglev), df=(numGroups-1)*numTaxa, ncp=0, lower.tail=TRUE)
 	
 	# Calculate pvalues
-	pval <- sum(XdcStatVector > qAlpha)/length(XdcStatVector)
+	pval <- (sum(XdcStatVector > qAlpha) + 1)/(length(XdcStatVector) + 1)
 	
 	return(pval)
 }
@@ -817,7 +1198,7 @@ MC.Xoc.statistics <- function(group.Nrs, numMC=10, group.alphap, type="ha", sigl
 	qAlpha <- qchisq(p=(1-siglev), df=(numGroups-1), ncp=0, lower.tail=TRUE)
 	
 	# Calculate pvalues
-	pval <- sum(XocStatVector > qAlpha)/length(XocStatVector)
+	pval <- (sum(XocStatVector > qAlpha) + 1)/(length(XocStatVector) + 1)
 	
 	return(pval)
 }
@@ -886,11 +1267,14 @@ Xmcupo.sevsample <- function(group.data){
 	if(missing(group.data))
 		stop("group.data is missing.")
 	
-	# Check every data set has the same number of taxa
+	# Make sure we have the same columns
 	taxaCounts <- sapply(group.data, ncol)
 	numTaxa	<- taxaCounts[1]
-	if(any(taxaCounts != numTaxa))
-		stop("Every data set must have matching taxa")
+	if(any(taxaCounts != numTaxa)){
+		warning("Group columns do not match, running formatDataSets.")
+		group.data <- formatDataSets(group.data)
+		numTaxa <- ncol(group.data[[1]])
+	}
 	
 	numGroups <- length(group.data)
 	
@@ -913,16 +1297,17 @@ Xmcupo.sevsample <- function(group.data){
 	return(ret)	
 }
 
-# reviewed 9/29/16
 Xoc.sevsample <- function(group.data, epsilon=10^(-4)){
 	if(missing(group.data))
 		stop("group.data missing.")
 	
-	# Check every data set has the same number of taxa
+	# Make sure we have the same columns
 	taxaCounts <- sapply(group.data, ncol)
 	numTaxa	<- taxaCounts[1]
-	if(any(taxaCounts != numTaxa))
-		stop("Every data set must have matching taxa")
+	if(any(taxaCounts != numTaxa)){
+		warning("Group columns do not match, running formatDataSets.")
+		group.data <- formatDataSets(group.data)
+	}
 	
 	numGroups <- length(group.data)
 	
@@ -935,19 +1320,20 @@ Xoc.sevsample <- function(group.data, epsilon=10^(-4)){
 	return(sev.overd.test)			
 }
 
-# reviewed 9/29/16
 Xdc.sevsample <- function(group.data, epsilon=10^(-4), est="mom"){
 	if(missing(group.data))
 		stop("group.data missing.")
 	if(tolower(est) != "mle" && tolower(est) != "mom")
 		stop(sprintf("Est '%s' not found. Est must be 'mle' or 'mom'.", as.character(est)))
 	
-	
-	# Check every data set has the same number of taxa
+	# Make sure we have the same columns
 	taxaCounts <- sapply(group.data, ncol)
 	numTaxa	<- taxaCounts[1]
-	if(any(taxaCounts != numTaxa))
-		stop("Every data set must have matching taxa")
+	if(any(taxaCounts != numTaxa)){
+		warning("Group columns do not match, running formatDataSets.")
+		group.data <- formatDataSets(group.data)
+		numTaxa <- ncol(group.data[[1]])
+	}
 	
 	numGroups <- length(group.data)
 	
@@ -975,10 +1361,9 @@ Xdc.sevsample <- function(group.data, epsilon=10^(-4), est="mom"){
 ### ~~~~~~~~~~~~~~~~~~~~~
 ### Other functions
 ### ~~~~~~~~~~~~~~~~~~~~~
-# reviewed 9/30/16
 loglikDM <- function(data, alphap){	
-	data <- data[,colSums(data)!=0, drop=FALSE]
-	alphap <- alphap[alphap!=0]
+	data <- data[,colSums(data) != 0, drop=FALSE]
+	alphap <- alphap[alphap != 0]
 	
 	ll <- sum(lgamma(rowSums(data)+1) + lgamma(sum(alphap)) - lgamma(sum(alphap)+rowSums(data))) + 
 			sum(rowSums(lgamma(sweep(data, 2, alphap, "+")) - lgamma(data+1) - lgamma(t(replicate(nrow(data), alphap)))))
@@ -986,7 +1371,6 @@ loglikDM <- function(data, alphap){
 	return(ll)
 }
 
-# reviewed 9/30/16
 weirMoM <- function(data, MoM, se=FALSE){
 	numTaxa <- ncol(data)
 	numSamp <- nrow(data)
@@ -1021,7 +1405,141 @@ getBC <- function(data){
 	mdsPoints <- vegan::postMDS(nonMetricMDS$points, bcDist)
 	mds <- vegan::scores(mdsPoints)
 	
-	return(mds[,1:2])
+	return(mds[, 1:2])
+}
+
+rpartInit <- function(y, offset, parms, wt){
+	hmp.pkg.env$EVAL_COUNT_RPART <- 1	# reset eval counts
+	sfun <- function(yval, dev, wt, ylevel, digits ){
+		paste(" mean=", round(mean(yval), 3), sep="")
+	}
+	environment(sfun) <- .GlobalEnv
+	list(y=y, parms=NULL, numresp=1, numy=ncol(y), summary=sfun)
+}
+
+rpartEval <- function(y, wt, parms){
+	# Set a unique label
+	label <- hmp.pkg.env$EVAL_COUNT_RPART
+	hmp.pkg.env$EVAL_COUNT_RPART <- hmp.pkg.env$EVAL_COUNT_RPART + 1
+	
+	dev <- DM.MoM(y)$loglik * -1
+	
+	list(label=label, deviance=dev)
+}
+
+rpartSplit <- function(y, wt, x, parms, continuous){
+	# Get initial LL
+	LL <- DM.MoM(y)$loglik
+	
+	# Determine what we are comparing
+	if(continuous){
+		numTests <- length(x) - 1
+		dir <- rep(-1, numTests)
+	}else{
+		uniqX <- sort(unique(x))
+		numTests <- length(uniqX) - 1
+		dir <- uniqX
+	}
+	
+	# Run through every comparison
+	LRT <- rep(0, numTests)
+	for(i in 1:numTests){
+		if(continuous){
+			grp1 <- y[1:i,, drop=FALSE]
+			grp2 <- y[-c(1:i),, drop=FALSE]
+		}else{
+			grp1 <- y[x == uniqX[i],, drop=FALSE]
+			grp2 <- y[x != uniqX[i],, drop=FALSE]
+		}
+		# Skip any 1 subject groups
+		if(nrow(grp1) == 1 || nrow(grp2) == 1)
+			next
+		
+		LLgrp1 <- DM.MoM(grp1)$loglik
+		LLgrp2 <- DM.MoM(grp2)$loglik
+		
+		# Skip any infinite LL comparisons (makes lrt 0)
+		if(LLgrp1 == Inf || LLgrp2 == Inf)
+			next
+		
+		LRT[i] <- -2*(LL-LLgrp1-LLgrp2)
+	}
+	ret <- list(goodness=LRT, direction=dir)
+	
+	return(ret)
+}
+
+pruneRpart <- function(rpartResults, rpartData, iter){
+	# Turn data into abundance
+	abunData <- t(apply(rpartData, 1, function(x){x/sum(x)}))
+	
+	# Pull out cp values for nodes
+	cp <- rpartResults$cp[, 1]
+	
+	# Calculate within group distance and # of terminal nodes        
+	wDist <- rep(0, length(cp))
+	numLeafs <- rep(0, length(cp))
+	
+	# Run permuted data at every cp level
+	for(i in 1:length(cp)){
+		resTemp <- rpart::prune(rpartResults, cp[i])
+		
+		# Find all the leaf nodes
+		leafSplits <- unique(resTemp$where)
+		numLeafs[i] <- length(leafSplits)
+		
+		# Calc distance within each leaf
+		for(j in 1:numLeafs[i]){
+			leafId <- which(resTemp$where == leafSplits[j])
+			if(length(leafId) == 1)
+				next
+			wDist[i] <- wDist[i] + sum(dist(abunData[leafId,]))
+		}
+	}
+	tempResults <- data.frame(Tree=paste("Tree", iter), CP=cp, Leafs=numLeafs, WDist=log(wDist))
+	
+	return(tempResults)
+}
+
+pioest <- function(group.data){
+	if(missing(group.data))
+		stop("data.groups missing.")
+	
+	# Make sure we have the same columns
+	taxaCounts <- sapply(group.data, ncol)
+	numTaxa	<- taxaCounts[1]
+	if(any(taxaCounts != numTaxa)){
+		warning("Group columns do not match, running formatDataSets.")
+		group.data <- formatDataSets(group.data)
+		numTaxa <- ncol(group.data[[1]])
+	}
+	
+	numGroups <- length(group.data)
+	
+	# Pull out pi and calculate xsc
+	pis <- matrix(0, numTaxa, numGroups)
+	xscs <- rep(0, numGroups)
+	for(i in 1:numGroups){
+		tempData <- group.data[[i]]
+		
+		numReadsSubs <- rowSums(tempData)
+		totalReads <- sum(tempData)
+		pi <- colSums(tempData)/totalReads
+		theta <- weirMoM(tempData, pi)$theta
+		
+		xscs[i] <- (theta * (sum(numReadsSubs^2)-totalReads) + totalReads) / totalReads^2
+		pis[,i] <- pi
+	}
+	
+	# Remove any 0 taxa
+	pis <- pis[rowSums(pis) != 0,]
+	
+	# Calculate pi0
+	pi0 <- rowSums(pis/xscs)/sum(1/xscs)
+	
+	names(pi0) <- colnames(group.data[[1]])
+	
+	return(pi0)
 }
 
 
@@ -1120,7 +1638,8 @@ Xoc.statistics <- function(group.data, epsilon=10^(-4)){
 	logliks <- rep(0, numGroups)
 	pis <- vector("list", numGroups)
 	for(i in 1:numGroups){
-		fit <- dirmult::dirmult(group.data[[i]], initscalar=DM.MoM(group.data[[i]])$theta, epsilon=epsilon, trace=FALSE)
+		tempTheta <- DM.MoM(group.data[[i]])$theta
+		fit <- dirmult::dirmult(group.data[[i]], initscalar=(1-tempTheta)/tempTheta, epsilon=epsilon, trace=FALSE)
 		
 		thetas[i] <- fit$theta
 		logliks[i] <- fit$loglik
@@ -1139,12 +1658,14 @@ Xoc.statistics <- function(group.data, epsilon=10^(-4)){
 Xdc.statistics <- function(group.data, epsilon=10^(-4)){ 
 	# Get the loglik from the fit from every data set
 	logliks <- sapply(group.data, function(x, epsilon){
-				dirmult::dirmult(x, initscalar=DM.MoM(x)$theta, epsilon=epsilon, trace=FALSE)$loglik
+				tempTheta <- DM.MoM(x)$theta
+				dirmult::dirmult(x, initscalar=(1-tempTheta)/tempTheta, epsilon=epsilon, trace=FALSE)$loglik
 			}, epsilon=epsilon)
 	
 	# Get the fit assuming all in the same group
 	groupDataC <- do.call(rbind, group.data)
-	groupFit <- dirmult::dirmult(groupDataC, initscalar=DM.MoM(groupDataC)$theta, epsilon=epsilon, trace=FALSE)	
+	tempTheta <- DM.MoM(groupDataC)$theta
+	groupFit <- dirmult::dirmult(groupDataC, initscalar=(1-tempTheta)/tempTheta, epsilon=epsilon, trace=FALSE)	
 	
 	# Calculate the xdc
 	xdc <- -2*(groupFit$loglik-sum(logliks))
@@ -1152,7 +1673,6 @@ Xdc.statistics <- function(group.data, epsilon=10^(-4)){
 	return(xdc)
 }
 
-# reviewed 9/29/16
 Xdc.statistics.MoM <- function(group.data){	
 	# Get the loglik from the fit from every data set
 	logliks <- sapply(group.data, function(x){DM.MoM(x)$loglik})
@@ -1303,8 +1823,9 @@ Xdc.statistics.Hnull.Ha <- function(alphap, group.Nrs, type, est){
 
 
 
+
 ### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-### OLD / Removable???
+### Unused
 ### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 #Xoc.statistics.MoM <- function(group.data){
@@ -1320,7 +1841,8 @@ Xdc.statistics.Hnull.Ha <- function(alphap, group.Nrs, type, est){
 #	logliks <- rep(0, numGroups)
 #	equalThetaLogliks <- rep(0, numGroups)
 #	for(i in 1:numGroups){
-#		fit <- dirmult::dirmult(group.data[[i]], initscalar=DM.MoM(group.data[[i]])$theta, epsilon=epsilon, trace=FALSE)
+#		tempTheta <- DM.MoM(group.data[[i]])$theta
+#		fit <- dirmult::dirmult(group.data[[i]], initscalar=(1-tempTheta)/tempTheta, epsilon=epsilon, trace=FALSE)
 #		logliks[i] <- fit$loglik
 #		
 #		equalThetaLogliks[i] <- loglikDM(group.data[[i]], fit$pi*(1-groupTheta)/groupTheta)	
@@ -1331,83 +1853,61 @@ Xdc.statistics.Hnull.Ha <- function(alphap, group.Nrs, type, est){
 #	
 #	return(xoc)
 #}
-#
-#LLDM <- function(data, alpha){
-#	numReadsSubs <- rowSums(data)
+
+#Plot.DM.GA <- function(group.data, gaResults, ylab="Fractional Abundance"){
+#	if(missing(group.data) || missing(gaResults))
+#		stop("group.data and/or gaResults is missing.")
 #	
-#	# Calculate the lprob for every row
-#	lprob <- rep(0, nrow(data))
-#	for(i in 1:nrow(data)){
-#		lprob[i] <- log(numReadsSubs[i]) + lbeta(sum(alpha), numReadsSubs[i]) -
-#				sum(log(data[i,])) - sum(lbeta(alpha , as.numeric(data[i,])))
-#	}
-#	
-#	# Sum the lprob to get the loglik
-#	ll <- sum(lprob)
-#	
-#	return(ll)
-#}
-#
-#Plot.MLE.old <- function(group.data, main="Group MLE Plot", returnData=FALSE){
-#	if(missing(group.data))
-#		stop("group.data is missing.")
-#	
-#	# Check the number of groups
-#	numGroups <- length(group.data)
-#	
-#	# Check every data set has the same number of taxa
+#	# Make sure we have the same columns
 #	taxaCounts <- sapply(group.data, ncol)
 #	numTaxa	<- taxaCounts[1]
-#	if(any(taxaCounts != numTaxa))
-#		stop("Every data set must have matching taxa.")
+#	if(any(taxaCounts != numTaxa)){
+#		warning("Group columns do not match, running formatDataSets.")
+#		group.data <- formatDataSets(group.data)
+#	}
 #	
 #	# Make sure we have group names
 #	if(is.null(names(group.data))){
-#		grpNames <- paste("Data Set", 1:numGroups)
+#		grpNames <- paste("Data Set", 1:length(group.data))
 #	}else{
 #		grpNames <- names(group.data)
 #	}
 #	
-#	# Remove periods in taxa names and check for taxa with 0 column sums (add 1 to subject 1)
-#	group.data <- lapply(group.data, function(x){
-#				colnames(x) <- gsub(pattern="[.]", replacement="_", x=colnames(x))
-#				badTaxa <- which(colSums(x) == 0)
-#				if(length(badTaxa) != 0)
-#					x[1, badTaxa] <- x[1, badTaxa] + 1
-#				return(x)
-#			})
+#	# Get Pis
+#	pi1 <- DM.MoM(group.data[[1]])$pi
+#	pi2 <- DM.MoM(group.data[[2]])$pi
 #	
-#	# Get the mle and mom for every group
-#	fit <- lapply(group.data, function(x){dirmult(x, trace=FALSE)})
-#	params <- mapply(function(x, y){dirmult.summary(x, y)}, x=group.data, y=fit, SIMPLIFY=FALSE)
+#	# Get info about selected columns
+#	selCols <- gaResults$selCols
+#	numSelCols <- length(selCols)
+#	selIndex <- gaResults$selColsIndex
 #	
-#	# Pull out just the mle
-#	params <- lapply(params, function(x){x[,c("MLE", "se.MLE")]})
-#	params <- lapply(params, function(x){x[-nrow(x),]})
+#	# Get info about non selected columns
+#	nonSelCols <- gaResults$nonSelCols
+#	numNotSelCols <- length(nonSelCols)
 #	
-#	# Add taxa columns
-#	params <- lapply(params, function(x){cbind(x, Taxa=rownames(x), stringsAsFactors=FALSE)})
+#	# Plotting selected
+#	par(mfrow=c(2,1))
+#	plot(pi1[selIndex], xaxt="n", xlab="", ylab=ylab, main="Selected Columns Only", 
+#			col="blue", pch=15, type="b", ylim=c(0, max(pi1, pi2)))
+#	points(pi2[selIndex], col="red", pch=10, type="b")
+#	axis(1, at=1:numSelCols, labels=FALSE)
+#	text(x=1:numSelCols, y=par()$usr[3]-0.1*(par()$usr[4]-par()$usr[3]), labels=selCols, srt=45, adj=1, xpd=TRUE)
+#	legend("topright", grpNames, col=c("blue", "red"), pch=c(15, 10))
 #	
-#	# Collapse into a single dataframe
-#	allParams <- do.call(rbind, params)
-#	colnames(allParams) <- c("pi", "se", "Taxa")
-#	allParams$Group	<- rep(grpNames, each=numTaxa)
-#	
-#	#  Make Taxa an ordered factor
-#	allParams$Group <- factor(allParams$Group, levels=unique(grpNames))
-#	allParams$Taxa <- factor(allParams$Taxa, levels=unique(colnames(group.data[[1]])))
-#	
-#	print(ggplot(allParams, aes(y=pi, x=Taxa, colour=Group)) +
-#					geom_point() + theme(legend.position = "top") +
-#					geom_errorbar(aes(ymax = pi + 1.96*se, ymin = pi - 1.96*se)) +
-#					labs(title=main, y=expression(paste("MLE ", pi)), x="") +
-#					theme(axis.text.x=element_text(hjust=1, angle=45, size=6)
-#					)
-#	)
-#	
-#	if(returnData)
-#		return(allParams)
+#	# Plotting non selected
+#	plot(pi1[-selIndex], xaxt="n", xlab="", ylab=ylab, main="Non-Selected Columns Only", 
+#			col="blue", pch=15, type="b", ylim=c(0, max(pi1, pi2)))
+#	points(pi2[-selIndex], col="red", pch=10, type="b")
+#	axis(1, at=1:numNotSelCols, labels=FALSE)
+#	text(x=1:numNotSelCols, y=par()$usr[3]-0.1*(par()$usr[4]-par()$usr[3]), labels=nonSelCols, srt=45, adj=1, xpd=TRUE)
+#	legend("topright", grpNames, col=c("blue", "red"), pch=c(15, 10))
 #}
+
+
+
+
+
 
 
 

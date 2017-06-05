@@ -195,6 +195,7 @@ MC.ZT.statistics.Test <- function(){
 }
 
 
+
 ### ~~~~~~~~~~~~~~~~~~~~~
 ### Plot functions
 ### ~~~~~~~~~~~~~~~~~~~~~
@@ -204,31 +205,26 @@ Barchart.data.Test <- function(){
 	Barchart.data(saliva)
 }
 
-Plot.Abundance.Test <- function(){
-	data(saliva)
-	data(throat)
-	data(tonsils)
-	
-	### Combine the data sets into a single list
-	group.data <- list(saliva, throat, tonsils)
-	
-	Plot.Abundance(group.data)
-}
-
-Est.PI.Test <- function(){
-	data(saliva)
-	data(throat)
-	data(tonsils)
-	
-	### Combine the data sets into a single list
-	group.data <- list(saliva, throat, tonsils)
-	
+Plot.PI.Test <- function(){
 	\dontrun{
-		### Get and plot PI using MLE
-		mle <- Est.PI(group.data)
+		data(saliva)
+		data(throat)
+		data(tonsils)
 		
-		### Get and plot PI using MoM
-		mom <- Est.PI(group.data, FALSE)
+		### Combine the data sets into a single list
+		group.data <- list(saliva, throat, tonsils)
+		
+		### Get PI using MLE with CI
+		mle <- Est.PI(group.data)$MLE
+		
+		### Plot with Error Bars
+		Plot.PI(mle)
+		
+		### Plot without Error Bars
+		Plot.PI(mle, FALSE)
+		
+		### Plot with Error Bars and scaling
+		Plot.PI(mle, TRUE, TRUE)
 	}
 }
 
@@ -242,7 +238,6 @@ Plot.MDS.Test <- function(){
 	
 	Plot.MDS(group.data)
 }
-
 
 
 
@@ -261,24 +256,6 @@ DM.MoM.Test <- function(){
 	
 	fit.throat <- DM.MoM(throat)
 	fit.throat
-}
-
-pioest.Test <- function(){
-	data(saliva)
-	data(throat)
-	
-	### Combine the data sets into a single list
-	group.data <- list(saliva, throat)
-	
-	pio <- pioest(group.data)
-	pio
-}
-
-Get.Diversities.Test <- function(){
-	data(saliva)
-	
-	salDiv <- Get.Diversities(saliva)
-	salDiv
 }
 
 Kullback.Leibler.Test <- function(){
@@ -306,6 +283,136 @@ Xmcupo.effectsize.Test <- function(){
 	effect
 }
 
+Est.PI.Test <- function(){
+	\dontrun{
+		data(saliva)
+		data(throat)
+		data(tonsils)
+		
+		### Combine the data sets into a single list
+		group.data <- list(saliva, throat, tonsils)
+		
+		### Get PI using MLE and MOM with CI
+		piEsts <- Est.PI(group.data)
+		
+		mle <- piEsts$MLE
+		mom <- piEsts$MOM
+	}
+}
+
+Test.Paired.Test <- function(){
+	data(saliva)
+	data(throat)
+	
+	
+	### Since saliva and throat come from same subjects, the data is paired 
+	saliva1 <- saliva[-24,] # Make saliva 23 subjects to match throat
+	group.data <- list(throat, saliva1)
+	
+	### We use 1 for speed, should be at least 1,000
+	numPerms <- 1
+	
+	pval <- Test.Paired(group.data, numPerms)
+	pval
+}
+
+DM.Rpart.Test <- function(){
+	data(saliva)
+	data(throat)
+	data(tonsils)
+	
+	### Create some covariates for our data set
+	site <- c(rep("Saliva", nrow(saliva)), rep("Throat", nrow(throat)), 
+			rep("Tonsils", nrow(tonsils)))
+	covars <- data.frame(Group=site)
+	
+	### Combine our data into a single object
+	data <- rbind(saliva, throat, tonsils)
+	
+	rpartRes <- DM.Rpart(data, covars)
+}
+
+DM.Rpart.Perm.Test <- function(){
+	data(saliva)
+	data(throat)
+	data(tonsils)
+	
+	### Create some covariates for our data set
+	site <- c(rep("Saliva", nrow(saliva)), rep("Throat", nrow(throat)), 
+			rep("Tonsils", nrow(tonsils)))
+	covars <- data.frame(Group=site)
+	
+	### Combine our data into a single object
+	data <- rbind(saliva, throat, tonsils)
+	
+	### We use 1 for speed, should be at least 1,000
+	numPerms <- 1
+	
+	rpartPerm <- DM.Rpart.Perm(data, covars, numPerms=numPerms)
+	
+	### Plot the best tree
+	rattle::fancyRpartPlot(rpartPerm$bestTree, sub="", main="Best Tree")
+}
+
+Gen.Alg.Test <- function(){
+	\dontrun{
+		data(saliva)
+		data(throat)
+		
+		### Combine the data into a single data frame
+		group.data <- list(saliva, throat)
+		group.data <- formatDataSets(group.data)
+		data <- do.call("rbind", group.data)
+		
+		### Normalize the data by subject
+		dataNorm <- t(apply(data, 1, function(x){x/sum(x)}))
+		
+		### Set covars to just be group membership
+		memb <- c(rep(0, nrow(saliva)), rep(1, nrow(throat)))
+		covars <- matrix(memb, length(memb), 1)
+		
+		### We use low numbers for speed. The exact numbers to use depend
+		### on the data being used, but generally the higher iters and popSize 
+		### the longer it will take to run.  earlyStop is then used to stop the
+		### run early if the results aren't improving.
+		iters <- 500
+		popSize <- 200
+		earlyStop <- 250
+		
+		gaRes <- Gen.Alg(dataNorm, covars, iters, popSize, earlyStop)
+	}
+}
+
+Gen.Alg.Consensus.Test <- function(){
+	\dontrun{
+		data(saliva)
+		data(throat)
+		
+		### Combine the data into a single data frame
+		group.data <- list(saliva, throat)
+		group.data <- formatDataSets(group.data)
+		data <- do.call("rbind", group.data)
+		
+		### Normalize the data by subject
+		dataNorm <- t(apply(data, 1, function(x){x/sum(x)}))
+		
+		### Set covars to just be group membership
+		memb <- c(rep(0, nrow(saliva)), rep(1, nrow(throat)))
+		covars <- matrix(memb, length(memb), 1)
+		
+		### We use low numbers for speed. The exact numbers to use depend
+		### on the data being used, but generally the higher iters and popSize 
+		### the longer it will take to run.  earlyStop is then used to stop the
+		### run early if the results aren't improving.
+		iters <- 500
+		popSize <- 200
+		earlyStop <- 250
+		numRuns <- 3
+		
+		gaRes <- Gen.Alg.Consensus(dataNorm, covars, .5, numRuns, FALSE, 3, 
+				iters, popSize, earlyStop)
+	}
+}
 
 
 ### ~~~~~~~~~~~~~~~~~~~~~
@@ -316,12 +423,12 @@ Data.filter.Test <- function(){
 	
 	### Excludes all samples with fewer than 1000 reads and collapses
 	### taxa with 11th or smaller abundance into one category 
-	filterDataNum <- Data.filter(saliva, "data", 1000, 10) 
+	filterDataNum <- Data.filter(saliva, "data", 1000, numTaxa=10) 
 	
 	### Excludes all samples with fewer than 1000 reads and collapses
 	### the least abundant taxa to keep as close to 85% of the data as
 	### possible
-	filterDataPer <- Data.filter(saliva, "data", 1000, perTaxa=.99) 
+	filterDataPer <- Data.filter(saliva, "data", 1000, perTaxa=.95) 
 	
 	dim(saliva)
 	dim(filterDataNum)

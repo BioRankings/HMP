@@ -19,9 +19,13 @@
 \alias{weirMoM}
 \alias{kullbackLeiber}
 \alias{getBC}
+\alias{pruneRpart}
+\alias{rpartInit}
+\alias{rpartEval}
+\alias{rpartSplit}
+\alias{hmp.pkg.env}
+\alias{pioest}
 
-%\alias{LLDM}
-%\alias{Plot.MLE.old}
 %\alias{Xoc.statistics.MoM}
 
 

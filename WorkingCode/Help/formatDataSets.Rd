@@ -9,7 +9,8 @@
 \usage{formatDataSets(group.data, data)}
 
 \arguments{
-  \item{group.data}{A list where each element is a matrix of taxonomic counts(columns) for each sample(rows).}
+  \item{group.data}{A list where each element is a matrix of taxonomic counts(columns) for each sample(rows). 
+  		Note that the row names should correspond to sample names}
   \item{data}{Deprecated. Replaced with group.data for clarity.}
  }
  
