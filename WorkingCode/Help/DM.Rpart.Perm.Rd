@@ -5,7 +5,7 @@
 
 \usage{
 	DM.Rpart.Perm(data, covars, plot = TRUE,  numPerms = 1000, parallel = FALSE, 
-	cores = 3, bestTreeCriteria = .05, minsplit = 1, minbucket = 1)
+	cores = 3, minsplit = 1, minbucket = 1, cp = 0)
 }
 
 \arguments{
@@ -15,10 +15,6 @@
   \item{numPerms}{Number of permutations.  In practice this should be at least 1,000.}
   \item{parallel}{When this is 'TRUE' it allows for parallel calculation of the permutations. Requires the package \code{doParallel}.}
   \item{cores}{The number of parallel processes to run if parallel is 'TRUE'.}
-  \item{bestTreeCriteria}{
-  		A fraction in the range (0, 1] used to elect which tree is best.  
-  		This should generally stay at 0.05.
-  	}
   \item{minsplit}{
   		The minimum number of observations to split on, see \link[rpart]{rpart.control}. 
   		This should generally stay at 1.
@@ -27,9 +23,13 @@
   		The minimum number of observations in any terminal node, see \link[rpart]{rpart.control}. 
   		This should generally stay at 1.
   	}
+  \item{cp}{
+  		The complexity parameter, see \link[rpart]{rpart.control}.
+  		This should generally stay at 0.
+  	}
 }
 
-\value{A list containing the raw and best rpart trees, and data from the rpart pruning.}
+\value{A list containing the raw rpart tree, the pvalues for different splits, and data from the rpart permuting.}
 
 \author{Sharina Carter, Elena Deych, Berkley Shands, William D. Shannon}
 
@@ -51,6 +51,11 @@
 	
 	rpartPerm <- DM.Rpart.Perm(data, covars, numPerms=numPerms)
 	
+	### Pull out a tree
+	rpartPerm$pvals
+	selectedNum <- 3
+	bestTree <- rpart::prune(rpartPerm$rawTree, cp=rpartPerm$rawPrune[selectedNum, 2])
+	
 	### Plot the best tree
-	rattle::fancyRpartPlot(rpartPerm$bestTree, sub="", main="Best Tree")
+	rpart.plot::rpart.plot(bestTree, main="Best Tree", extra=1)
 }

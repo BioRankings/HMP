@@ -1,5 +1,6 @@
 \name{Kullback.Leibler}
 \alias{Kullback.Leibler}
+\alias{kullbackLeiber}
 \title{Kullback Leibler}
 \description{Calculates Kullback Leibler divergence for all pairs of the datasets.}
 

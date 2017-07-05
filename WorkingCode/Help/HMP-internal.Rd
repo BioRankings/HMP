@@ -17,7 +17,6 @@
 \alias{ZT.statistics.Hnull.Ha}
 \alias{loglikDM}
 \alias{weirMoM}
-\alias{kullbackLeiber}
 \alias{getBC}
 \alias{pruneRpart}
 \alias{rpartInit}
@@ -25,9 +24,11 @@
 \alias{rpartSplit}
 \alias{hmp.pkg.env}
 \alias{pioest}
-
-%\alias{Xoc.statistics.MoM}
-
+\alias{gaScoring}
+\alias{gaCreation}
+\alias{gaPlot}
+\alias{plotRpartPerm}
+\alias{calcRpartPval}
 
 \title{Internal Functions}
 \description{These files are only called from inside other functions and are therefore not documented here.}

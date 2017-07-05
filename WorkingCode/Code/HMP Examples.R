@@ -350,8 +350,13 @@ DM.Rpart.Perm.Test <- function(){
 	
 	rpartPerm <- DM.Rpart.Perm(data, covars, numPerms=numPerms)
 	
+	### Pull out a tree
+	rpartPerm$pvals
+	selectedNum <- 3
+	bestTree <- rpart::prune(rpartPerm$rawTree, cp=rpartPerm$rawPrune[selectedNum, 2])
+	
 	### Plot the best tree
-	rattle::fancyRpartPlot(rpartPerm$bestTree, sub="", main="Best Tree")
+	rpart.plot::rpart.plot(bestTree, main="Best Tree", extra=1)
 }
 
 Gen.Alg.Test <- function(){

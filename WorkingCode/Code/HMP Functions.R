@@ -7,7 +7,7 @@ library(MASS)		# ginv function for Xsc.statistics
 library(vegan) 		# ga distances
 library(gplots)		# heatmap plots
 library(rpart)		# base rpart
-library(rattle)		# fancy rpart plotting
+library(rpart.plot)	# rpart plotting
 
 
 ### Define a global environment to use with rpart
@@ -138,8 +138,7 @@ Kullback.Leibler <- function(group.data, plot=TRUE, main="Kullback Leibler Diver
 						return(mle.param)
 					}
 				}, finally = {
-					# Close the parallel connections
-					parallel::stopCluster(cl)
+					parallel::stopCluster(cl) # Close the parallel connections
 				}
 		)
 	}else{
@@ -398,8 +397,7 @@ Test.Paired <- function(group.data, numPerms=1000, parallel=FALSE, cores=3){
 						return(obsDiffTemp)
 					}	
 				}, finally = {
-					# Close the parallel connections
-					parallel::stopCluster(cl)
+					parallel::stopCluster(cl) # Close the parallel connections
 				}
 		)
 	}else{
@@ -431,27 +429,22 @@ DM.Rpart <- function(data, covars, plot=TRUE, main="", minsplit=1, minbucket=1, 
 	
 	# Plot the rpart results
 	if(plot)
-		suppressWarnings(rattle::fancyRpartPlot(res, main=main, sub=NULL))
+		suppressWarnings(rpart.plot::rpart.plot(res, main=main, extra=1))
 	
 	return(res)
 }
 
-DM.Rpart.Perm <- function(data, covars, plot=TRUE, numPerms=1000, parallel=FALSE, cores=3, bestTreeCriteria=.05, minsplit=1, minbucket=1){
+DM.Rpart.Perm <- function(data, covars, plot=TRUE, numPerms=1000, parallel=FALSE, cores=3, minsplit=1, minbucket=1, cp=0){
 	if(missing(data) || missing(covars))
 		stop("data and/or covars are missing.")
 	
 	if(numPerms <= 0)
 		stop("The number of permutations must be an integer greater than 0.")
 	
-	if(bestTreeCriteria <= 0 || bestTreeCriteria > 1)
-		stop("bestTreeCriteria must be greater than 0 and equal or less than 1")
-	
 	numSub <- nrow(data) 
-	methods <- list(init=rpartInit, eval=rpartEval, split=rpartSplit)
 	
-	# Run our base rpart
-	res <- DM.Rpart(data, covars, FALSE, minsplit, minbucket)
-	# Prune the tree back
+	# Run and prune an rpart tree with raw data
+	res <- DM.Rpart(data, covars, FALSE, "", minsplit, minbucket, cp)
 	rawResults <- pruneRpart(res, data, "Raw")
 	
 	### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -461,88 +454,47 @@ DM.Rpart.Perm <- function(data, covars, plot=TRUE, numPerms=1000, parallel=FALSE
 		doParallel::registerDoParallel(cl)
 		tryCatch({ 
 					rpartPermRes <- foreach::foreach(i=1:numPerms, .combine=rbind, .multicombine=TRUE, .inorder=FALSE, .packages=c("rpart", "HMP")) %dopar%{
-						# Randomize subject order                      
+						# Run and prune an rpart tree with permuted data                    
 						permData <- data[sample(numSub, numSub),, drop=FALSE]
-						# Run full tree on permuted data
-						resPerm <- rpart::rpart(as.matrix(permData) ~., data=covars, method=methods, minsplit=minsplit, minbucket=minbucket, cp=0)
-						# Prune the tree back
+						resPerm <- DM.Rpart(permData, covars, FALSE, "", minsplit, minbucket, cp)
 						tempResults <- pruneRpart(resPerm, permData, i)
 						
 						return(tempResults)
 					}
 				}, finally = {
-					# Close the parallel connections
-					parallel::stopCluster(cl)
+					parallel::stopCluster(cl) # Close the parallel connections
 				}
 		)
 	}else{
 		rpartPermRes <- matrix(0, 0, 4)
 		for(i in 1:numPerms){
-			# Randomize subject order  
+			# Run and prune an rpart tree with permuted data
 			permData <- data[sample(numSub, numSub),, drop=FALSE]
-			# Run full tree on permuted data
-			resPerm <- rpart::rpart(as.matrix(permData) ~., data=covars, method=methods, minsplit=minsplit, minbucket=minbucket, cp=0)
-			# Prune the tree back
+			resPerm <- DM.Rpart(permData, covars, FALSE, "", minsplit, minbucket, cp)
 			tempResults <- pruneRpart(resPerm, permData, i)
 			
 			rpartPermRes <- rbind(rpartPermRes, tempResults)
 		}
 	}
 	
-	# Combine perms with real data
-	allData <- rbind(rawResults, rpartPermRes)
-	rownames(allData) <- 1:nrow(allData)
-	
 	# Plot the permutations vs the real data
-	if(plot){
-		par(mar=c(5,4,4,5)+.1)
-		
-		# Make the inital plot
-		plot(rawResults$Leafs, rawResults$WDist, type="b", main="# of Leaves vs Within Group Distance", 
-				lwd=2, xlab="Number of Terminal Nodes", ylab="Log of Within Group Distance", 
-				ylim=range(allData$WDist, na.rm=TRUE, finite=TRUE), xlim=range(allData$Leafs, na.rm=TRUE, finite=TRUE))
-		# Add all permutation results
-		for(i in 1:numPerms){
-			tempData <- rpartPermRes[rpartPermRes$Tree == unique(rpartPermRes$Tree)[i],]
-			lines(tempData$Leafs, tempData$WDist, col="red", lty=2)
-		}
-		# Redraw original line
-		lines(rawResults$Leafs, rawResults$WDist, col="black", type="b", pch=16, lwd=3)
-	}
+	if(plot)
+		plotRpartPerm(rawResults, rpartPermRes, numPerms)
 	
-	# Approx values for permuted trees based on our real tree
-	treeNames <- levels(rpartPermRes$Tree)
-	pvalData <- matrix(NA, nrow(rawResults), numPerms)
-	colnames(pvalData) <- treeNames
-	for(i in 1:numPerms){
-		id <- which(rpartPermRes$Tree == treeNames[i])
-		if(length(id) <= 1) # Skip any 1 node trees
-			next
-		pvalData[,i] <- stats::approx(rpartPermRes$Leafs[id], rpartPermRes$WDist[id], rawResults$Leafs)$y
-	}
+	# Calculate pvalues
+	pvals <- calcRpartPval(rawResults, rpartPermRes, numPerms)
+	rawResults <- cbind(rawResults, pvals)
 	
-	# Calculate P-value
-	pval <- rowMeans(rawResults$WDist >= pvalData, na.rm=TRUE)
-	pval <- ifelse(is.na(pval), 0, pval)
-	rawResults <- cbind(rawResults, pval)
-	
-	# Prune with best CP
-	ids <- which(pval <= bestTreeCriteria)
-	if(length(ids) > 0){
-		bestId <- max(ids)
-	}else{
-		bestId <- 1
-	}
-	bestRes <- rpart::prune(res, cp=rawResults[bestId, 2])
-	
-	ret <- list(rawTree=res, bestTree=bestRes, rawPrune=rawResults, permPrune=rpartPermRes, pvals=pval)
+	ret <- list(rawTree=res, rawPrune=rawResults, permPrune=rpartPermRes, pvals=pvals)
 	return(ret)
 }
 
-Gen.Alg <- function(data, covars, iters=50, popSize=200, earlyStop=0, dataDist="euclidean", covarDist="gower", verbose=FALSE, plot=TRUE){
+Gen.Alg <- function(data, covars, iters=50, popSize=200, earlyStop=0, dataDist="euclidean", covarDist="gower", 
+		verbose=FALSE, plot=TRUE, minSolLen=NULL, maxSolLen=NULL){
 	if(missing(data) || missing(covars))
 		stop("data and/or covars are missing.")
 	
+	# Check for any bad numbers
 	if(iters <= 0)
 		stop("iters must be an integer greater than 0")
 	if(popSize <= 0)
@@ -550,43 +502,42 @@ Gen.Alg <- function(data, covars, iters=50, popSize=200, earlyStop=0, dataDist="
 	if(earlyStop < 0)
 		stop("earlyStop must be an integer greater than or equal to 0")
 	
+	# Check distances
 	if(dataDist != "euclidean" && dataDist != "gower")
 		stop("data.dist must be euclidean or gower.")
 	if(covarDist != "euclidean" && covarDist != "gower")
 		stop("covars.dist must be euclidean or gower.")
 	
+	# Define size
+	size <- ncol(data)
+	
+	# Not ready for use yet
+	penalty <- FALSE
+	
+	# Check stopping rules
+	if(!is.null(minSolLen))
+		if(minSolLen < 0 || minSolLen >= size)
+			stop("minSolLen must be 0 or greater and less than the number of columns in data.")
+	if(!is.null(maxSolLen))
+		if(maxSolLen <= 0 || maxSolLen > size)
+			stop("maxSolLen must be greater than 0 and less than or equal to the number columns in data.")
+	if(!is.null(maxSolLen) && !is.null(minSolLen))
+		if(maxSolLen < minSolLen)
+			stop("maxSolLen must be bigger than minSolLen.")
+	
+	# Define some variables for use in the GA loop
+	mutationChance <- 1/(size+1)
+	elitism <- floor(popSize/5)
+	evalSumm <- matrix(NA, iters, 6)
+	newPopSize <- popSize - elitism
+	newPopulation <- matrix(NA, newPopSize, size)
+	parentProb <- stats::dnorm(1:popSize, mean=0, sd=(popSize/3))
+	
 	if(verbose){
 		print("X. Current Step : Current Time Taken")
 		runningTime <- proc.time()
-	}
-	
-	# Value for making sure the scoring function result is: best = highest
-	REV_SCORE <- -1
-	
-	# Scoring function
-	scoring <- function(indices, covarDists, colDists, distType, REV_SCORE) {
-		if(sum(indices) == 0)
-			return(0)
-		
-		edges <- which(indices==1)
-		
-		# Combine the distance matrices based on distance type
-		if(distType == "gower"){
-			combinedSolDists <- Reduce("+", colDists[edges])/sum(indices)
-		}else{
-			combinedSolDists <- sqrt(Reduce("+", colDists[edges]))
-		}
-		
-		# Get the correlation and penalize it based on the number of columns selected
-		mycor <- stats::cor(combinedSolDists, covarDists)
-#		if(USE_PENALTY)
-#			mycor <- mycor * (length(indices)-sum(indices))/(length(indices)-1)
-		
-		return(mycor * REV_SCORE)
-	}
-	
-	if(verbose)
 		print(paste("1. Calculating Distances:", round((proc.time() - runningTime)[3], 3)))
+	}
 	
 	# Set up our base distance matrix
 	covarDists <- vegan::vegdist(covars, covarDist)
@@ -595,50 +546,14 @@ Gen.Alg <- function(data, covars, iters=50, popSize=200, earlyStop=0, dataDist="
 	colDists <- vector("list", ncol(data))
 	for(i in 1:ncol(data))
 		colDists[[i]] <- vegan::vegdist(data[,i], dataDist)
-	
 	if(dataDist == "euclidean")
 		colDists <- lapply(colDists, function(x) x^2)
-	
-	# Define our evolution controls
-	size <- ncol(data)
-	mutationChance <- 1/(size+1)
-	elitism <- floor(popSize/5)
-	zeroToOneRatio <- 10
 	
 	if(verbose)
 		print(paste("2. Creating Starting Data:", round((proc.time() - runningTime)[3], 3)))
 	
-	# Create population
-	population <- matrix(NA, popSize, size)
-	
-	# Make 10 starting points as long as our popSize is > 10
-	suggestionCount <- 10
-	if(popSize >= suggestionCount){
-		# Get a rough starting point
-		rstart <- apply(data, 2, sd)/apply(data, 2, mean)
-		
-		# Use the rough difference to make starting solutions
-		breaks <- seq(.05, 1, .1)
-		suggestions <- matrix(0, length(breaks), length(rstart))
-		for(i in 1:length(breaks))
-			suggestions[i,] <- ifelse(rstart >= quantile(rstart, breaks[i]), 1, 0)
-		
-		population[1:suggestionCount,] <- suggestions
-	}else{
-		suggestionCount <- 0
-	}
-	
-	# Fill any remaining population spots with random solutions
-	if(popSize != suggestionCount){
-		for(child in (suggestionCount+1):popSize) 
-			population[child,] <- sample(c(rep(0, zeroToOneRatio), 1), size, replace=TRUE)
-	}
-	
-	# Define some variables for use in the GA loop
-	evalSumm <- matrix(NA, iters, 6)
-	newPopSize <- popSize - elitism
-	newPopulation <- matrix(NA, newPopSize, size)
-	parentProb <- stats::dnorm(1:popSize, mean=0, sd=(popSize/3))
+	# Create our starting data
+	population <- gaCreation(data, popSize)
 	
 	if(verbose)
 		print(paste("3. Scoring Starting Data:", round((proc.time() - runningTime)[3], 3)))
@@ -646,9 +561,9 @@ Gen.Alg <- function(data, covars, iters=50, popSize=200, earlyStop=0, dataDist="
 	# Score and sort
 	evalVals <- rep(NA, popSize)
 	for(e in 1:popSize)
-		evalVals[e] <- scoring(population[e,], covarDists, colDists, dataDist, REV_SCORE)
-	population <- population[order(evalVals),]
-	bestScoreValue <- min(evalVals)
+		evalVals[e] <- gaScoring(population[e,], covarDists, colDists, dataDist, penalty, minSolLen, maxSolLen)
+	population <- population[order(evalVals, decreasing=TRUE),]
+	bestScoreValue <- max(evalVals)
 	bestScoreCounter <- 0
 	
 	if(verbose)
@@ -684,16 +599,16 @@ Gen.Alg <- function(data, covars, iters=50, popSize=200, earlyStop=0, dataDist="
 		
 		# Score and sort our new solutions
 		for(e in 1:popSize)
-			evalVals[e] <- scoring(population[e,], covarDists, colDists, dataDist, REV_SCORE)
-		population <- population[order(evalVals),]
+			evalVals[e] <- gaScoring(population[e,], covarDists, colDists, dataDist, penalty, minSolLen, maxSolLen)
+		population <- population[order(evalVals, decreasing=TRUE),]
 		evalSumm[i,] <- summary(evalVals)
 		
 		# Check if we want to stop early
-		if(bestScoreValue == min(evalVals)){
+		if(bestScoreValue == max(evalVals)){
 			bestScoreCounter <- bestScoreCounter + 1
 		}else{
 			bestScoreCounter <- 0
-			bestScoreValue <- min(evalVals)
+			bestScoreValue <- max(evalVals)
 		}
 		
 		if(bestScoreCounter == earlyStop && earlyStop != 0)
@@ -710,14 +625,9 @@ Gen.Alg <- function(data, covars, iters=50, popSize=200, earlyStop=0, dataDist="
 	rownames(evalSumm) <- paste("Iteration", 1:nrow(evalSumm))
 	colnames(evalSumm) <- c("Best", "25%ile", "Median", "Mean", "75%ile", "Worst")
 	
-	evalVals <- matrix(evalVals[order(evalVals)], 1, length(evalVals))
+	evalVals <- matrix(evalVals[order(evalVals, decreasing=TRUE)], 1, length(evalVals))
 	colnames(evalVals) <- paste("Solution ", 1:length(evalVals))
 	rownames(evalVals) <- "Score"
-	
-	# Adjust scoring values back if REV_SCORE changed it
-	gaEvalSumms <- evalSumm * REV_SCORE
-	gaPopulation <- population
-	gaEvals <- evalVals * REV_SCORE
 	
 	# Get selected columns using a consensus
 	selIndex <- which(population[1,] == 1)
@@ -727,14 +637,10 @@ Gen.Alg <- function(data, covars, iters=50, popSize=200, earlyStop=0, dataDist="
 	nonSel <- colnames(data)[-selIndex]
 	
 	# Plot scoring summary
-	if(plot){
-		plot(gaEvalSumms[,4], type="l", ylab="Score", ylim=c(0, 1), lwd=2, main="Eval Scores by Iteration", xlab="Iteration")
-		lines(gaEvalSumms[,6], col="red", lwd=2)
-		lines(gaEvalSumms[,1], col="blue", lwd=2)
-		legend("topleft", colnames(gaEvalSumms)[c(4, 6, 1)], pch=16, col=c("black", "red", "blue"))
-	}
+	if(plot)
+		gaPlot(evalSumm)
 	
-	return(list(scoreSumm=gaEvalSumms, solutions=gaPopulation, scores=gaEvals, time=gaTime, selected=sel, nonSelected=nonSel, selectedIndex=selIndex))
+	return(list(scoreSumm=evalSumm, solutions=population, scores=evalVals, time=gaTime, selected=sel, nonSelected=nonSel, selectedIndex=selIndex))
 }
 
 Gen.Alg.Consensus <- function(data, covars, consensus=.5, numRuns=10, parallel=FALSE, cores=3, ...){
@@ -750,13 +656,12 @@ Gen.Alg.Consensus <- function(data, covars, consensus=.5, numRuns=10, parallel=F
 		doParallel::registerDoParallel(cl)
 		
 		tryCatch({
-					gaRes <- foreach::foreach(i=1:numRuns, .combine=list, .multicombine=TRUE, .inorder=FALSE, .packages=c("cluster", "vegan")) %dopar%{
+					gaRes <- foreach::foreach(i=1:numRuns, .combine=list, .multicombine=TRUE, .inorder=FALSE, .packages=c("vegan", "HMP")) %dopar%{
 						tempResults <- Gen.Alg(data, covars, plot=FALSE, verbose=FALSE, ...)
 						return(tempResults)
 					}
 				}, finally = {
-					# Close the parallel connections
-					parallel::stopCluster(cl)
+					parallel::stopCluster(cl) # Close the parallel connections
 				}
 		)
 	}else{
@@ -853,8 +758,8 @@ Plot.MDS <- function(group.data, main="Group MDS", retCords=FALSE){
 		cols <- c(cols, rep(availCols[i], nrow(group.data[[i]])))
 	
 	# Plot MDS
-	graphics::plot(loc, pch=16, ylab="MDS 2", xlab="MDS 1", col=cols)
-	graphics::legend("topright", legend=grpNames, pch=16, col=availCols)
+	plot(loc, pch=16, ylab="MDS 2", xlab="MDS 1", col=cols)
+	legend("topright", legend=grpNames, pch=16, col=availCols)
 	
 	if(retCords)
 		return(loc)
@@ -869,7 +774,7 @@ formatDataSets <- function(group.data, data=NULL){
 	if(missing(group.data) && is.null(data))
 		stop("group.data missing.")
 	
-	# Check is data is still being used
+	# Check if data is still being used
 	if(!is.null(data) && missing(group.data))
 		group.data <- data
 	
@@ -924,11 +829,16 @@ Data.filter <- function(data, order.type="data", minReads=0, numTaxa=NULL, perTa
 		stop(sprintf("'%s' not recognized, order.type must be 'data' or 'sample'", as.character(order.type)))
 	
 	# Check if K is still being used
-	if(is.null(numTaxa) && !is.null(K))
+	if(is.null(numTaxa) && !is.null(K)){
+		warning("'K' is deprecated. It has been replaced with numTaxa. View the help files for details.")
 		numTaxa <- K
+	}
+	
 	# Check if reads.crit is still being used
-	if(!is.null(reads.crit))
+	if(!is.null(reads.crit)){
+		warning("'reads.crit' is deprecated. It has been replaced with minReads. View the help files for details.")
 		minReads <- reads.crit
+	}
 	
 	# Check if numTaxa or perTaxa is being used
 	if(!is.null(numTaxa) && !is.null(perTaxa))
@@ -991,8 +901,10 @@ MC.ZT.statistics <- function(Nrs, numMC=10, fit, type="ha", siglev=0.05, MC=NULL
 		stop(sprintf("Type '%s' not found. Type must be 'ha' for power or 'hnull' for size.\n", as.character(type)))
 	
 	# Check if someone is still using MC
-	if(!is.null(MC))
+	if(!is.null(MC)){
+		warning("'MC' is deprecated. It has been replaced with numMC. View the help files for details.")
 		numMC <- MC
+	}
 	
 	# Get all the ZT values
 	ZTstatMatrix <- matrix(0, numMC, 2)
@@ -1024,8 +936,10 @@ MC.Xsc.statistics <- function(Nrs, numMC=10, fit, pi0=NULL, type="ha", siglev=0.
 		stop(sprintf("Type '%s' not found. Type must be 'ha' for power or 'hnull' for size.\n", as.character(type)))
 	
 	# Check if someone is still using MC
-	if(!is.null(MC))
+	if(!is.null(MC)){
+		warning("'MC' is deprecated. It has been replaced with numMC. View the help files for details.")
 		numMC <- MC
+	}
 	
 	# Get all the XSC values
 	XscStatVector <- rep(0, numMC)
@@ -1045,7 +959,13 @@ MC.Xsc.statistics <- function(Nrs, numMC=10, fit, pi0=NULL, type="ha", siglev=0.
 }
 
 MC.Xmc.statistics <- function(group.Nrs, numMC=10, pi0, group.pi, group.theta, type="ha", siglev=0.05, MC=NULL, Nrs=NULL) {
-	if(missing(group.theta) || missing(pi0) || (missing(group.Nrs) && is.null(Nrs)))
+	# Check if someone is still using Nrs
+	if(!is.null(Nrs)){
+		warning("'Nrs' is deprecated. It has been replaced with group.Nrs. View the help files for details.")
+		group.Nrs <- Nrs
+	}
+	
+	if(missing(group.theta) || missing(pi0) || missing(group.Nrs))
 		stop("group.Nrs, pi0 and/or group.theta missing.")
 	if(missing(group.pi) && tolower(type) == "ha")
 		stop("group.pi missing.")
@@ -1053,12 +973,10 @@ MC.Xmc.statistics <- function(group.Nrs, numMC=10, pi0, group.pi, group.theta, t
 		stop(sprintf("Type '%s' not found. Type must be 'ha' for power or 'hnull' for size.\n", as.character(type)))
 	
 	# Check if someone is still using MC
-	if(!is.null(MC))
+	if(!is.null(MC)){
+		warning("'MC' is deprecated. It has been replaced with numMC. View the help files for details.")
 		numMC <- MC
-	
-	# Check if someone is still using Nrs
-	if(!is.null(Nrs))
-		group.Nrs <- Nrs
+	}
 	
 	numGroups <- length(group.Nrs)
 	numTaxa <- length(pi0)
@@ -1089,7 +1007,13 @@ MC.Xmc.statistics <- function(group.Nrs, numMC=10, pi0, group.pi, group.theta, t
 }
 
 MC.Xmcupo.statistics <- function(group.Nrs, numMC=10, pi0, group.pi, group.theta, type="ha", siglev=0.05, MC=NULL, Nrs=NULL) {
-	if(missing(group.theta) || (missing(group.Nrs) && is.null(Nrs)))
+	# Check if someone is still using Nrs
+	if(!is.null(Nrs)){
+		warning("'Nrs' is deprecated. It has been replaced with group.Nrs. View the help files for details.")
+		group.Nrs <- Nrs
+	}
+	
+	if(missing(group.theta) || missing(group.Nrs))
 		stop("group.Nrs and/or group.theta missing.")
 	if(missing(group.pi) && tolower(type) == "ha")
 		stop("group.pi missing.")
@@ -1099,12 +1023,10 @@ MC.Xmcupo.statistics <- function(group.Nrs, numMC=10, pi0, group.pi, group.theta
 		stop(sprintf("Type '%s' not found. Type must be 'ha' for power or 'hnull' for size.\n", as.character(type)))
 	
 	# Check if someone is still using MC
-	if(!is.null(MC))
+	if(!is.null(MC)){
+		warning("'MC' is deprecated. It has been replaced with numMC. View the help files for details.")
 		numMC <- MC
-	
-	# Check if someone is still using Nrs
-	if(!is.null(Nrs))
-		group.Nrs <- Nrs
+	}
 	
 	numGroups <- length(group.Nrs)
 	
@@ -1136,7 +1058,13 @@ MC.Xmcupo.statistics <- function(group.Nrs, numMC=10, pi0, group.pi, group.theta
 }
 
 MC.Xdc.statistics <- function(group.Nrs, numMC=10, alphap, type="ha", siglev=0.05, est="mom", MC=NULL, Nrs=NULL) {
-	if(missing(alphap) || (missing(group.Nrs) && is.null(Nrs)))
+	# Check if someone is still using Nrs
+	if(!is.null(Nrs)){
+		warning("'Nrs' is deprecated. It has been replaced with group.Nrs. View the help files for details.")
+		group.Nrs <- Nrs
+	}
+	
+	if(missing(alphap) || missing(group.Nrs))
 		stop("group.Nrs and/or alphap  missing.")
 	if(tolower(type) != "ha" && tolower(type) != "hnull")
 		stop(sprintf("Type '%s' not found. Type must be 'ha' for power or 'hnull' for size.\n", as.character(type)))
@@ -1144,12 +1072,10 @@ MC.Xdc.statistics <- function(group.Nrs, numMC=10, alphap, type="ha", siglev=0.0
 		stop(sprintf("Est '%s' not found. Est must be 'mle' or 'mom'.", as.character(est)))
 	
 	# Check if someone is still using MC
-	if(!is.null(MC))
+	if(!is.null(MC)){
+		warning("'MC' is deprecated. It has been replaced with numMC. View the help files for details.")
 		numMC <- MC
-	
-	# Check if someone is still using Nrs
-	if(!is.null(Nrs))
-		group.Nrs <- Nrs
+	}
 	
 	numGroups <- length(group.Nrs)	
 	
@@ -1174,18 +1100,22 @@ MC.Xdc.statistics <- function(group.Nrs, numMC=10, alphap, type="ha", siglev=0.0
 }
 
 MC.Xoc.statistics <- function(group.Nrs, numMC=10, group.alphap, type="ha", siglev=0.05, MC=NULL, Nrs=NULL) {
-	if(missing(group.alphap) || (missing(group.Nrs) && is.null(Nrs)))
+	# Check if someone is still using Nrs
+	if(!is.null(Nrs)){
+		warning("'Nrs' is deprecated. It has been replaced with group.Nrs. View the help files for details.")
+		group.Nrs <- Nrs
+	}
+	
+	if(missing(group.alphap) || missing(group.Nrs))
 		stop("group.Nrs and/or group.alphap missing.")
 	if(tolower(type) != "ha" && tolower(type) != "hnull")
 		stop(sprintf("Type '%s' not found. Type must be 'ha' for power or 'hnull' for size.\n", as.character(type)))
 	
 	# Check if someone is still using MC
-	if(!is.null(MC))
+	if(!is.null(MC)){
+		warning("'MC' is deprecated. It has been replaced with numMC. View the help files for details.")
 		numMC <- MC
-	
-	# Check if someone is still using Nrs
-	if(!is.null(Nrs))
-		group.Nrs <- Nrs
+	}
 	
 	numGroups <- length(group.Nrs)	
 	
@@ -1408,6 +1338,131 @@ getBC <- function(data){
 	return(mds[, 1:2])
 }
 
+pioest <- function(group.data){
+	if(missing(group.data))
+		stop("data.groups missing.")
+	
+	# Make sure we have the same columns
+	taxaCounts <- sapply(group.data, ncol)
+	numTaxa	<- taxaCounts[1]
+	if(any(taxaCounts != numTaxa)){
+		warning("Group columns do not match, running formatDataSets.")
+		group.data <- formatDataSets(group.data)
+		numTaxa <- ncol(group.data[[1]])
+	}
+	
+	numGroups <- length(group.data)
+	
+	# Pull out pi and calculate xsc
+	pis <- matrix(0, numTaxa, numGroups)
+	xscs <- rep(0, numGroups)
+	for(i in 1:numGroups){
+		tempData <- group.data[[i]]
+		
+		numReadsSubs <- rowSums(tempData)
+		totalReads <- sum(tempData)
+		pi <- colSums(tempData)/totalReads
+		theta <- weirMoM(tempData, pi)$theta
+		
+		xscs[i] <- (theta * (sum(numReadsSubs^2)-totalReads) + totalReads) / totalReads^2
+		pis[,i] <- pi
+	}
+	
+	# Remove any 0 taxa
+	pis <- pis[rowSums(pis) != 0,]
+	
+	# Calculate pi0
+	pi0 <- rowSums(pis/xscs)/sum(1/xscs)
+	
+	names(pi0) <- colnames(group.data[[1]])
+	
+	return(pi0)
+}
+
+
+
+### ~~~~~~~~~~~~~~~~~~~~~
+### ga functions
+### ~~~~~~~~~~~~~~~~~~~~~
+gaScoring <- function(indices, covarDists, colDists, distType, penalty, minSolLen, maxSolLen) {
+	BAD_RETURN <- -2 # Return worse than cor could do
+	
+	numSel <- sum(indices)
+	
+	# Check if nothing is selected
+	if(numSel == 0) 
+		return(BAD_RETURN) 
+	# Check if we dont have enough selected
+	if(!is.null(minSolLen)) 
+		if(numSel < minSolLen)
+			return(BAD_RETURN)
+	# Check if we dont have too many selected
+	if(!is.null(maxSolLen)) 
+		if(numSel > maxSolLen)
+			return(BAD_RETURN) 
+	
+	edges <- which(indices==1)
+	
+	# Combine the distance matrices based on distance type
+	if(distType == "gower"){
+		combinedSolDists <- Reduce("+", colDists[edges])/sum(indices)
+	}else{
+		combinedSolDists <- sqrt(Reduce("+", colDists[edges]))
+	}
+	
+	# Get the correlation and penalize it based on the number of columns selected
+	mycor <- stats::cor(combinedSolDists, covarDists)
+	if(penalty)
+		mycor <- mycor * (length(indices)-sum(indices))/(length(indices)-1)
+	
+	return(mycor)
+}
+
+gaCreation <- function(data, popSize){
+	ZERO_TO_ONE_RATIO <- 10 # Ratio of 0 to 1s for the random data
+	SUGGESTION_COUNT <- 10 # Number starting points we should make from the data
+	
+	size <- ncol(data)
+	population <- matrix(NA, popSize, size)
+	
+	# Make 10 starting points as long as our popSize is > 10
+	if(popSize >= SUGGESTION_COUNT){
+		# Get a rough starting point
+		rstart <- apply(data, 2, stats::sd)/apply(data, 2, mean)
+		
+		# Use the rough difference to make starting solutions
+		breaks <- seq(.05, 1, 1/SUGGESTION_COUNT)
+		suggestions <- matrix(0, length(breaks), length(rstart))
+		for(i in 1:length(breaks))
+			suggestions[i,] <- ifelse(rstart >= stats::quantile(rstart, breaks[i]), 1, 0)
+		
+		population[1:SUGGESTION_COUNT,] <- suggestions
+		numCreated <- SUGGESTION_COUNT
+	}else{
+		numCreated <- 0
+	}
+	
+	# Fill any remaining population spots with random solutions
+	if(popSize != SUGGESTION_COUNT){
+		for(child in (numCreated+1):popSize) 
+			population[child,] <- sample(c(rep(0, ZERO_TO_ONE_RATIO), 1), size, replace=TRUE)
+	}
+	
+	return(population)
+}
+
+gaPlot <- function(evalSumm){
+	plot(evalSumm[,4], type="l", ylab="Score", ylim=c(0, 1), lwd=2, main="Eval Scores by Iteration", xlab="Iteration")
+	lines(evalSumm[,6], col="red", lwd=2)
+	lines(evalSumm[,1], col="blue", lwd=2)
+	legend("topleft", colnames(evalSumm)[c(4, 6, 1)], pch=16, col=c("black", "red", "blue"))
+}
+
+
+
+### ~~~~~~~~~~~~~~~~~~~~~
+### rpart functions
+### ~~~~~~~~~~~~~~~~~~~~~
 rpartInit <- function(y, offset, parms, wt){
 	hmp.pkg.env$EVAL_COUNT_RPART <- 1	# reset eval counts
 	sfun <- function(yval, dev, wt, ylevel, digits ){
@@ -1423,6 +1478,10 @@ rpartEval <- function(y, wt, parms){
 	hmp.pkg.env$EVAL_COUNT_RPART <- hmp.pkg.env$EVAL_COUNT_RPART + 1
 	
 	dev <- DM.MoM(y)$loglik * -1
+	
+	# Skip any infinite LL comparisons (makes lrt 0)
+	if(dev == Inf || dev == -Inf)
+		dev <- 0
 	
 	list(label=label, deviance=dev)
 }
@@ -1474,7 +1533,8 @@ pruneRpart <- function(rpartResults, rpartData, iter){
 	abunData <- t(apply(rpartData, 1, function(x){x/sum(x)}))
 	
 	# Pull out cp values for nodes
-	cp <- rpartResults$cp[, 1]
+	cp <- rpartResults$cp[,1]
+	relErr <- rpartResults$cp[,3]
 	
 	# Calculate within group distance and # of terminal nodes        
 	wDist <- rep(0, length(cp))
@@ -1489,57 +1549,58 @@ pruneRpart <- function(rpartResults, rpartData, iter){
 		numLeafs[i] <- length(leafSplits)
 		
 		# Calc distance within each leaf
-		for(j in 1:numLeafs[i]){
-			leafId <- which(resTemp$where == leafSplits[j])
-			if(length(leafId) == 1)
-				next
-			wDist[i] <- wDist[i] + sum(dist(abunData[leafId,]))
-		}
+#		for(j in 1:numLeafs[i]){
+#			leafId <- which(resTemp$where == leafSplits[j])
+#			if(length(leafId) == 1)
+#				next
+#			wDist[i] <- wDist[i] + sum(dist(abunData[leafId,]))
+#		}
 	}
-	tempResults <- data.frame(Tree=paste("Tree", iter), CP=cp, Leafs=numLeafs, WDist=log(wDist))
+	tempResults <- data.frame(Tree=paste("Tree", iter), CP=cp, Leafs=numLeafs, WDist=wDist, RelErr=relErr)
 	
 	return(tempResults)
 }
 
-pioest <- function(group.data){
-	if(missing(group.data))
-		stop("data.groups missing.")
+plotRpartPerm <- function(rawResults, rpartPermRes, numPerms){
+	# Combine perms with real data
+	allData <- rbind(rawResults, rpartPermRes)
+	rownames(allData) <- 1:nrow(allData)
 	
-	# Make sure we have the same columns
-	taxaCounts <- sapply(group.data, ncol)
-	numTaxa	<- taxaCounts[1]
-	if(any(taxaCounts != numTaxa)){
-		warning("Group columns do not match, running formatDataSets.")
-		group.data <- formatDataSets(group.data)
-		numTaxa <- ncol(group.data[[1]])
+	par(mar=c(5, 4, 4, 5) + .1)
+	
+	# Make the inital plot
+	plot(NULL, type="b", main="Number of Leaves vs Relative Error", lwd=2, 
+			xlab="Number of Terminal Nodes", 
+			ylab="Relative Error", 
+			xlim=range(allData$Leafs, na.rm=TRUE, finite=TRUE),
+			ylim=range(allData$RelErr, na.rm=TRUE, finite=TRUE)
+	)
+	# Add all permutation results
+	for(i in 1:numPerms){
+		tempData <- rpartPermRes[rpartPermRes$Tree == unique(rpartPermRes$Tree)[i],]
+		lines(tempData$Leafs, tempData$RelErr, col="red", lty=2)
+	}
+	# Draw raw line
+	lines(rawResults$Leafs, rawResults$RelErr, col="black", type="b", pch=16, lwd=3)
+}
+
+calcRpartPval <- function(rawResults, rpartPermRes, numPerms){
+	# Approx values for permuted trees based on our real tree
+	treeNames <- levels(rpartPermRes$Tree)
+	pvalData <- matrix(NA, nrow(rawResults), numPerms)
+	colnames(pvalData) <- treeNames
+	for(i in 1:numPerms){
+		id <- which(rpartPermRes$Tree == treeNames[i])
+		if(length(id) <= 1) # Skip any 1 node trees
+			next
+		pvalData[,i] <- stats::approx(rpartPermRes$Leafs[id], rpartPermRes$RelErr[id], rawResults$Leafs)$y
 	}
 	
-	numGroups <- length(group.data)
+	# Calculate P-value
+	pval <- rowMeans(rawResults$RelErr >= pvalData, na.rm=TRUE)
+	pval <- ifelse(is.na(pval), 0, pval)
 	
-	# Pull out pi and calculate xsc
-	pis <- matrix(0, numTaxa, numGroups)
-	xscs <- rep(0, numGroups)
-	for(i in 1:numGroups){
-		tempData <- group.data[[i]]
-		
-		numReadsSubs <- rowSums(tempData)
-		totalReads <- sum(tempData)
-		pi <- colSums(tempData)/totalReads
-		theta <- weirMoM(tempData, pi)$theta
-		
-		xscs[i] <- (theta * (sum(numReadsSubs^2)-totalReads) + totalReads) / totalReads^2
-		pis[,i] <- pi
-	}
-	
-	# Remove any 0 taxa
-	pis <- pis[rowSums(pis) != 0,]
-	
-	# Calculate pi0
-	pi0 <- rowSums(pis/xscs)/sum(1/xscs)
-	
-	names(pi0) <- colnames(group.data[[1]])
-	
-	return(pi0)
+	return(pval)
 }
 
 
@@ -1853,58 +1914,6 @@ Xdc.statistics.Hnull.Ha <- function(alphap, group.Nrs, type, est){
 #	
 #	return(xoc)
 #}
-
-#Plot.DM.GA <- function(group.data, gaResults, ylab="Fractional Abundance"){
-#	if(missing(group.data) || missing(gaResults))
-#		stop("group.data and/or gaResults is missing.")
-#	
-#	# Make sure we have the same columns
-#	taxaCounts <- sapply(group.data, ncol)
-#	numTaxa	<- taxaCounts[1]
-#	if(any(taxaCounts != numTaxa)){
-#		warning("Group columns do not match, running formatDataSets.")
-#		group.data <- formatDataSets(group.data)
-#	}
-#	
-#	# Make sure we have group names
-#	if(is.null(names(group.data))){
-#		grpNames <- paste("Data Set", 1:length(group.data))
-#	}else{
-#		grpNames <- names(group.data)
-#	}
-#	
-#	# Get Pis
-#	pi1 <- DM.MoM(group.data[[1]])$pi
-#	pi2 <- DM.MoM(group.data[[2]])$pi
-#	
-#	# Get info about selected columns
-#	selCols <- gaResults$selCols
-#	numSelCols <- length(selCols)
-#	selIndex <- gaResults$selColsIndex
-#	
-#	# Get info about non selected columns
-#	nonSelCols <- gaResults$nonSelCols
-#	numNotSelCols <- length(nonSelCols)
-#	
-#	# Plotting selected
-#	par(mfrow=c(2,1))
-#	plot(pi1[selIndex], xaxt="n", xlab="", ylab=ylab, main="Selected Columns Only", 
-#			col="blue", pch=15, type="b", ylim=c(0, max(pi1, pi2)))
-#	points(pi2[selIndex], col="red", pch=10, type="b")
-#	axis(1, at=1:numSelCols, labels=FALSE)
-#	text(x=1:numSelCols, y=par()$usr[3]-0.1*(par()$usr[4]-par()$usr[3]), labels=selCols, srt=45, adj=1, xpd=TRUE)
-#	legend("topright", grpNames, col=c("blue", "red"), pch=c(15, 10))
-#	
-#	# Plotting non selected
-#	plot(pi1[-selIndex], xaxt="n", xlab="", ylab=ylab, main="Non-Selected Columns Only", 
-#			col="blue", pch=15, type="b", ylim=c(0, max(pi1, pi2)))
-#	points(pi2[-selIndex], col="red", pch=10, type="b")
-#	axis(1, at=1:numNotSelCols, labels=FALSE)
-#	text(x=1:numNotSelCols, y=par()$usr[3]-0.1*(par()$usr[4]-par()$usr[3]), labels=nonSelCols, srt=45, adj=1, xpd=TRUE)
-#	legend("topright", grpNames, col=c("blue", "red"), pch=c(15, 10))
-#}
-
-
 
 
 
