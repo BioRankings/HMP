@@ -1530,7 +1530,7 @@ rpartSplit <- function(y, wt, x, parms, continuous){
 
 pruneRpart <- function(rpartResults, rpartData, iter){
 	# Turn data into abundance
-	abunData <- t(apply(rpartData, 1, function(x){x/sum(x)}))
+#	abunData <- t(apply(rpartData, 1, function(x){x/sum(x)}))
 	
 	# Pull out cp values for nodes
 	cp <- rpartResults$cp[,1]
@@ -1542,7 +1542,7 @@ pruneRpart <- function(rpartResults, rpartData, iter){
 	
 	# Run permuted data at every cp level
 	for(i in 1:length(cp)){
-		resTemp <- rpart::prune(rpartResults, cp[i])
+		resTemp <- rpart::prune(rpartResults, cp[i] + 10^(-10)) # We need to add a tiny amount to cp due to rounding issues
 		
 		# Find all the leaf nodes
 		leafSplits <- unique(resTemp$where)
