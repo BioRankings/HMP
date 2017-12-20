@@ -106,7 +106,7 @@ MC.Xmc.statistics.Test <- function(){
 	
 	### Computing Power of the test statistics (Type II error)
 	group.pi <- rbind(fit.throat$pi, fit.tonsils$pi)
-	pval2 <- MC.Xmc.statistics(group.Nrs, numMC, pi0, group.pi, group.theta, "ha")
+	pval2 <- MC.Xmc.statistics(group.Nrs, numMC, pi0, group.pi, group.theta)
 	pval2
 }
 
@@ -140,7 +140,7 @@ MC.Xmcupo.statistics.Test <- function(){
 	
 	### Computing Power of the test statistics (Type II error)
 	group.pi <- rbind(fit.throat$pi, fit.tonsils$pi)
-	pval2 <- MC.Xmcupo.statistics(group.Nrs, numMC, pi0, group.pi, group.theta)
+	pval2 <- MC.Xmcupo.statistics(group.Nrs, numMC, group.pi=group.pi, group.theta=group.theta)
 	pval2
 }
 
@@ -239,6 +239,91 @@ Plot.MDS.Test <- function(){
 	Plot.MDS(group.data)
 }
 
+Plot.RM.Barchart <- function(){
+	data(saliva)
+	data(throat)
+	
+	### Reduce the size of the data
+	saliva <- Data.filter(saliva, numTaxa=9)
+	throat <- Data.filter(throat, numTaxa=9)
+	
+	### Get the gamma value for the data
+	saliva.gamma <- DM.MoM(saliva)$gamma
+	throat.gamma <- DM.MoM(throat)$gamma
+	mid.gamma <- (saliva.gamma + throat.gamma)/2
+	
+	### Generate a the number of reads per sample
+	### The first number is the number of reads and the second is the number of subjects
+	nrs <- rep(10000, 20)
+	
+	### Create data sets to be our time series in a list
+	group.data <- list(
+			Dirichlet.multinomial(nrs, saliva.gamma),
+			Dirichlet.multinomial(nrs, saliva.gamma),
+			Dirichlet.multinomial(nrs, saliva.gamma),
+			Dirichlet.multinomial(nrs, saliva.gamma),
+			Dirichlet.multinomial(nrs, mid.gamma),
+			Dirichlet.multinomial(nrs, throat.gamma)
+	)
+	names(group.data) <- c(
+			"Group 1, Time 1", "Group 2, Time 1",
+			"Group 1, Time 2", "Group 2, Time 2",
+			"Group 1, Time 3", "Group 2, Time 3"
+	)
+	
+	### Set the group and time information for each list element
+	groups <- c(1, 2, 1, 2, 1, 2)
+	times <- c(1, 2, 3, 1, 2, 3)
+	
+	### Plot the data by Group
+	Plot.RM.Barchart(group.data, groups, times)
+	
+	### Plot the data by Time
+	Plot.RM.Barchart(group.data, groups, times, FALSE)
+}
+
+Plot.RM.Dotplot <- function(){
+	data(saliva)
+	data(throat)
+	
+	### Reduce the size of the data
+	saliva <- Data.filter(saliva, numTaxa=9)
+	throat <- Data.filter(throat, numTaxa=9)
+	
+	### Get the gamma value for the data
+	saliva.gamma <- DM.MoM(saliva)$gamma
+	throat.gamma <- DM.MoM(throat)$gamma
+	mid.gamma <- (saliva.gamma + throat.gamma)/2
+	
+	### Generate a the number of reads per sample
+	### The first number is the number of reads and the second is the number of subjects
+	nrs <- rep(10000, 20)
+	
+	### Create data sets to be our time series in a list
+	group.data <- list(
+			Dirichlet.multinomial(nrs, saliva.gamma),
+			Dirichlet.multinomial(nrs, saliva.gamma),
+			Dirichlet.multinomial(nrs, saliva.gamma),
+			Dirichlet.multinomial(nrs, saliva.gamma),
+			Dirichlet.multinomial(nrs, mid.gamma),
+			Dirichlet.multinomial(nrs, throat.gamma)
+	)
+	names(group.data) <- c(
+			"Group 1, Time 1", "Group 2, Time 1",
+			"Group 1, Time 2", "Group 2, Time 2",
+			"Group 1, Time 3", "Group 2, Time 3"
+	)
+	
+	### Set the group and time information for each list element
+	groups <- c(1, 2, 1, 2, 1, 2)
+	times <- c(1, 2, 3, 1, 2, 3)
+	
+	### Plot the data with error bars
+	Plot.RM.Dotplot(group.data, groups, times)
+	
+	### Plot the data without error bars
+	Plot.RM.Dotplot(group.data, groups, times, FALSE)
+}
 
 
 ### ~~~~~~~~~~~~~~~~~~~~~

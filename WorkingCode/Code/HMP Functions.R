@@ -8,6 +8,7 @@ library(vegan) 		# ga distances
 library(gplots)		# heatmap plots
 library(rpart)		# base rpart
 library(rpart.plot)	# rpart plotting
+library(lattice)	# Repeated measures plotting
 
 
 ### Define a global environment to use with rpart
@@ -483,15 +484,14 @@ DM.Rpart.Perm <- function(data, covars, plot=TRUE, numPerms=1000, parallel=FALSE
 	
 	# Calculate pvalues
 	pvals <- calcRpartPval(rawResults, rpartPermRes, numPerms)
-	rawResults <- cbind(rawResults, pvals)
 	
 	ret <- list(rawTree=res, rawPrune=rawResults, permPrune=rpartPermRes, pvals=pvals)
 	return(ret)
 }
 
 Gen.Alg <- function(data, covars, iters=50, popSize=200, earlyStop=0, dataDist="euclidean", covarDist="gower", 
-		verbose=FALSE, plot=TRUE, minSolLen=NULL, maxSolLen=NULL){
-	if(missing(data) || missing(covars))
+		verbose=FALSE, plot=TRUE, minSolLen=NULL, maxSolLen=NULL, custCovDist=NULL){
+	if(missing(data) || (missing(covars) && is.null(custCovDist)))
 		stop("data and/or covars are missing.")
 	
 	# Check for any bad numbers
@@ -540,7 +540,11 @@ Gen.Alg <- function(data, covars, iters=50, popSize=200, earlyStop=0, dataDist="
 	}
 	
 	# Set up our base distance matrix
-	covarDists <- vegan::vegdist(covars, covarDist)
+	if(is.null(custCovDist)){
+		covarDists <- vegan::vegdist(covars, covarDist)
+	}else{
+		covarDists <- custCovDist
+	}
 	
 	# Get each columns distance contribution
 	colDists <- vector("list", ncol(data))
@@ -623,7 +627,7 @@ Gen.Alg <- function(data, covars, iters=50, popSize=200, earlyStop=0, dataDist="
 	rownames(population) <- paste("Solution", 1:nrow(population))
 	colnames(population) <- colnames(data)
 	rownames(evalSumm) <- paste("Iteration", 1:nrow(evalSumm))
-	colnames(evalSumm) <- c("Best", "25%ile", "Median", "Mean", "75%ile", "Worst")
+	colnames(evalSumm) <- c("Worst", "25%ile", "Median", "Mean", "75%ile", "Best")
 	
 	evalVals <- matrix(evalVals[order(evalVals, decreasing=TRUE)], 1, length(evalVals))
 	colnames(evalVals) <- paste("Solution ", 1:length(evalVals))
@@ -721,6 +725,9 @@ Plot.PI <- function(estPi, errorBars=TRUE, logScale=FALSE, main="PI Vector", yla
 	if(logScale)
 		piPlot <- piPlot + ggplot2::scale_y_log10()
 	
+	if(logScale)
+		piPlot <- piPlot + ggplot2::labs(y=paste(ylab, "(Logged)"))
+	
 	print(piPlot)
 }
 
@@ -758,13 +765,110 @@ Plot.MDS <- function(group.data, main="Group MDS", retCords=FALSE){
 		cols <- c(cols, rep(availCols[i], nrow(group.data[[i]])))
 	
 	# Plot MDS
-	plot(loc, pch=16, ylab="MDS 2", xlab="MDS 1", col=cols)
-	legend("topright", legend=grpNames, pch=16, col=availCols)
+	plot(loc, pch=16, ylab="MDS 2", xlab="MDS 1", col=cols, main=main)
+	legend("topright", legend=grpNames, pch=15, col=availCols)
 	
 	if(retCords)
 		return(loc)
 }
 
+Plot.RM.Barchart <- function(group.data, groups, times, plotByGrp=TRUE, col=NULL, conf=.95){
+	if(missing(group.data) || missing(groups) || missing(times))
+		stop("group.data, groups and/or times are missing.")
+	
+	numSamps <- length(group.data)
+	
+	### Get the pi params
+	myEst <- Est.PI(group.data, conf)
+	params <- myEst$MLE$params
+	
+	### Add the group and time information to the params
+	myGroups <- NULL
+	myTimes <- NULL
+	for(i in 1:numSamps){
+		myGroups <- c(myGroups, rep(groups[i], ncol(group.data[[1]])))
+		myTimes <- c(myTimes, rep(times[i], ncol(group.data[[1]])))
+	}
+	params$Grp <- as.character(myGroups)
+	params$Time <- as.character(myTimes)
+	
+	if(is.null(col))
+		col <- rainbow(length(unique(params$Taxa)))
+	
+	if(plotByGrp){
+		lattice::barchart(params$PI ~ params$Time | paste("Group", params$Grp), 
+				ylab="Fractional Abundance", xlab="Time", 
+				stack=TRUE, groups=params$Taxa, col=col,
+				key=list(
+						text=list(levels(params$Taxa)), 
+						points=list(pch=19, col=col),
+						columns=5
+				)
+		)
+	}else{
+		lattice::barchart(params$PI ~ params$Grp | paste("Time", params$Time),
+				ylab="Fractional Abundance", xlab="Time", 
+				stack=TRUE, groups=params$Taxa, col=col,
+				key=list(
+						text=list(levels(params$Taxa)), 
+						points=list(pch=19, col=col),
+						columns=5
+				)
+		)
+	}
+}
+
+Plot.RM.Dotplot <- function(group.data, groups, times, errorBars=TRUE, col=NULL, conf=.95, alpha=1){
+	if(missing(group.data) || missing(groups) || missing(times))
+		stop("group.data, groups and/or times are missing.")
+	
+	numSamps <- length(group.data)
+	numGrps <- length(unique(groups))
+	
+	### Get the pi params
+	myEst <- Est.PI(group.data, conf)
+	params <- myEst$MLE$params
+	
+	### Add the group and time information to the params
+	myGroups <- NULL
+	myTimes <- NULL
+	for(i in 1:numSamps){
+		myGroups <- c(myGroups, rep(groups[i], ncol(group.data[[1]])))
+		myTimes <- c(myTimes, rep(times[i], ncol(group.data[[1]])))
+	}
+	params$Grp <- as.character(myGroups)
+	params$Time <- as.character(myTimes)
+	
+	if(is.null(col))
+		col <- rainbow(numGrps)
+	### Add alpha to the colors
+	col <- apply(sapply(col, grDevices::col2rgb)/255, 2, function(x){grDevices::rgb(x[1], x[2], x[3], alpha=alpha)})  
+	
+	if(errorBars){
+		lattice::dotplot(params$Taxa ~ params$PI | paste("Time", params$Time), 
+				pch=19, groups=params$Grp, col=col,
+				ylab="Taxa", xlab="Fractional Abundance", 
+				panel=lattice::panel.superpose, 
+				panel.groups=function(x, y, subscripts, col, ...){
+					lattice::panel.xyplot(x, y, ...)
+					lattice::panel.segments(params$Lower[subscripts], y, params$Upper[subscripts], y, col=col)
+				},
+				key=list(
+						text=list(as.character(unique(params$Grp))), 
+						points=list(pch=19, col=col)
+				)
+		)
+	}else{
+		lattice::dotplot(params$Taxa ~ params$PI | paste("Time", params$Time), 
+				pch=19, groups=params$Grp, col=col,
+				ylab="Taxa", xlab="Fractional Abundance", 
+				key=list(
+						text=list(as.character(unique(params$Grp))), 
+						points=list(pch=19, col=col)
+				)
+		)
+	}
+}
 
 
 ### ~~~~~~~~~~~~~~~~~~~~~
@@ -1428,13 +1532,14 @@ gaCreation <- function(data, popSize){
 	# Make 10 starting points as long as our popSize is > 10
 	if(popSize >= SUGGESTION_COUNT){
 		# Get a rough starting point
-		rstart <- apply(data, 2, stats::sd)/apply(data, 2, mean)
+		rstart <- apply(data, 2, mean)
 		
 		# Use the rough difference to make starting solutions
 		breaks <- seq(.05, 1, 1/SUGGESTION_COUNT)
+		breakVals <- stats::quantile(rstart, breaks)
 		suggestions <- matrix(0, length(breaks), length(rstart))
 		for(i in 1:length(breaks))
-			suggestions[i,] <- ifelse(rstart >= stats::quantile(rstart, breaks[i]), 1, 0)
+			suggestions[i,] <- ifelse(rstart >= breakVals[i], 1, 0)
 		
 		population[1:SUGGESTION_COUNT,] <- suggestions
 		numCreated <- SUGGESTION_COUNT
@@ -1530,7 +1635,7 @@ rpartSplit <- function(y, wt, x, parms, continuous){
 
 pruneRpart <- function(rpartResults, rpartData, iter){
 	# Turn data into abundance
-#	abunData <- t(apply(rpartData, 1, function(x){x/sum(x)}))
+	abunData <- t(apply(rpartData, 1, function(x){x/sum(x)}))
 	
 	# Pull out cp values for nodes
 	cp <- rpartResults$cp[,1]
@@ -1549,12 +1654,12 @@ pruneRpart <- function(rpartResults, rpartData, iter){
 		numLeafs[i] <- length(leafSplits)
 		
 		# Calc distance within each leaf
-#		for(j in 1:numLeafs[i]){
-#			leafId <- which(resTemp$where == leafSplits[j])
-#			if(length(leafId) == 1)
-#				next
-#			wDist[i] <- wDist[i] + sum(dist(abunData[leafId,]))
-#		}
+		for(j in 1:numLeafs[i]){
+			leafId <- which(resTemp$where == leafSplits[j])
+			if(length(leafId) == 1)
+				next
+			wDist[i] <- wDist[i] + sum(dist(abunData[leafId,]))
+		}
 	}
 	tempResults <- data.frame(Tree=paste("Tree", iter), CP=cp, Leafs=numLeafs, WDist=wDist, RelErr=relErr)
 	
@@ -1569,19 +1674,19 @@ plotRpartPerm <- function(rawResults, rpartPermRes, numPerms){
 	par(mar=c(5, 4, 4, 5) + .1)
 	
 	# Make the inital plot
-	plot(NULL, type="b", main="Number of Leaves vs Relative Error", lwd=2, 
+	plot(NULL, type="b", main="Number of Leaves vs Within Group Distance", lwd=2, 
 			xlab="Number of Terminal Nodes", 
-			ylab="Relative Error", 
+			ylab="Within Group Distance", 
 			xlim=range(allData$Leafs, na.rm=TRUE, finite=TRUE),
-			ylim=range(allData$RelErr, na.rm=TRUE, finite=TRUE)
+			ylim=range(allData$WDist, na.rm=TRUE, finite=TRUE)
 	)
 	# Add all permutation results
 	for(i in 1:numPerms){
 		tempData <- rpartPermRes[rpartPermRes$Tree == unique(rpartPermRes$Tree)[i],]
-		lines(tempData$Leafs, tempData$RelErr, col="red", lty=2)
+		lines(tempData$Leafs, tempData$WDist, col="red", lty=2)
 	}
 	# Draw raw line
-	lines(rawResults$Leafs, rawResults$RelErr, col="black", type="b", pch=16, lwd=3)
+	lines(rawResults$Leafs, rawResults$WDist, col="black", type="b", pch=16, lwd=3)
 }
 
 calcRpartPval <- function(rawResults, rpartPermRes, numPerms){
@@ -1593,11 +1698,15 @@ calcRpartPval <- function(rawResults, rpartPermRes, numPerms){
 		id <- which(rpartPermRes$Tree == treeNames[i])
 		if(length(id) <= 1) # Skip any 1 node trees
 			next
-		pvalData[,i] <- stats::approx(rpartPermRes$Leafs[id], rpartPermRes$RelErr[id], rawResults$Leafs)$y
+		temp <- stats::approx(rpartPermRes$Leafs[id], rpartPermRes$WDist[id], rawResults$Leafs)$y
+#		pvalData[,i] <- -c(0, diff(temp)/diff(rawResults$Leafs))
+		pvalData[,i] <- temp
 	}
 	
 	# Calculate P-value
-	pval <- rowMeans(rawResults$RelErr >= pvalData, na.rm=TRUE)
+#	slope <- -c(0, diff(rawResults$WDist)/diff(rawResults$Leafs))
+#	pval <- rowMeans(slope <= pvalData, na.rm=TRUE)
+	pval <- rowMeans(rawResults$WDist> pvalData, na.rm=TRUE)
 	pval <- ifelse(is.na(pval), 0, pval)
 	
 	return(pval)
@@ -1629,7 +1738,7 @@ Xmcupo.statistics <- function(groupParameter){
 	pis <- pis[rowSums(pis)!=0,]
 	
 	# Calculate pi0
-	pi0 <- rowSums(pis/xscs)/sum(1/xscs)
+	pi0 <- colSums(t(pis)/xscs)/sum(1/xscs)
 	
 	# Calculate Xmcupo
 	Xmcupo <- sum(colSums((pis-pi0)^2/pi0)/xscs)		
