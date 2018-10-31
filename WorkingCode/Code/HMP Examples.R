@@ -3,6 +3,9 @@
 source("HMP Functions.R")
 
 
+#data <- read.csv("MicroTest.csv", row.names=1)
+#covars <- read.csv("CovTest.csv", row.names=1)
+
 saliva <- read.csv("saliva.csv", row.names=1)
 throat <- read.csv("throat.csv", row.names=1)
 tonsils <- read.csv("tonsils.csv", row.names=1)
@@ -414,10 +417,23 @@ DM.Rpart.Test <- function(){
 	### Combine our data into a single object
 	data <- rbind(saliva, throat, tonsils)
 	
-	rpartRes <- DM.Rpart(data, covars)
+	### For a single rpart tree
+	numCV <- 0
+	numCon <- 0
+	rpartRes <- DM.Rpart(data, covars, numCV=numCV, numCon=numCon)
+	
+	\dontrun{
+		### For a cross validated rpart tree
+		numCon <- 0
+		rpartRes <- DM.Rpart(data, covars, numCon=numCon)
+		
+		### For a cross validated rpart tree with consensus
+		numCon <- 2 # Note this is set to 2 for speed and should be at least 100
+		rpartRes <- DM.Rpart(data, covars, numCon=numCon)
+	}
 }
 
-DM.Rpart.Perm.Test <- function(){
+DM.Rpart.Base.Test <- function(){
 	data(saliva)
 	data(throat)
 	data(tonsils)
@@ -430,18 +446,41 @@ DM.Rpart.Perm.Test <- function(){
 	### Combine our data into a single object
 	data <- rbind(saliva, throat, tonsils)
 	
-	### We use 1 for speed, should be at least 1,000
-	numPerms <- 1
+	rpartRes <- DM.Rpart.Base(data, covars)
+}
+
+DM.Rpart.CV.Test <- function(){
+	data(saliva)
+	data(throat)
+	data(tonsils)
 	
-	rpartPerm <- DM.Rpart.Perm(data, covars, numPerms=numPerms)
+	### Create some covariates for our data set
+	site <- c(rep("Saliva", nrow(saliva)), rep("Throat", nrow(throat)), 
+			rep("Tonsils", nrow(tonsils)))
+	covars <- data.frame(Group=site)
 	
-	### Pull out a tree
-	rpartPerm$pvals
-	selectedNum <- 3
-	bestTree <- rpart::prune(rpartPerm$rawTree, cp=rpartPerm$rawPrune[selectedNum, 2])
+	### Combine our data into a single object
+	data <- rbind(saliva, throat, tonsils)
 	
-	### Plot the best tree
-	rpart.plot::rpart.plot(bestTree, main="Best Tree", extra=1)
+	rpartRes <- DM.Rpart.CV(data, covars)
+}
+
+DM.Rpart.CV.Consensus.Test <- function(){
+	data(saliva)
+	data(throat)
+	data(tonsils)
+	
+	### Create some covariates for our data set
+	site <- c(rep("Saliva", nrow(saliva)), rep("Throat", nrow(throat)), 
+			rep("Tonsils", nrow(tonsils)))
+	covars <- data.frame(Group=site)
+	
+	### Combine our data into a single object
+	data <- rbind(saliva, throat, tonsils)
+	
+	### This should be at least 100, but we use 1 for speed
+	numCon <- 10
+	rpartRes <- DM.Rpart.CV.Consensus(data, covars, numCon=numCon)
 }
 
 Gen.Alg.Test <- function(){

@@ -1,12 +1,13 @@
 Package: HMP
 Type: Package
 Title: Hypothesis Testing and Power Calculations for Comparing Metagenomic Samples from HMP
-Version: 1.5.1
-Date: 2017-12-20
-Author: Patricio S. La Rosa, Elena Deych, Sharina Carter, Berkley Shands, William D. Shannon
+Version: 1.6
+Date: 2018-10-31
+Author: Patricio S. La Rosa, Elena Deych, Sharina Carter, Berkley Shands, Dake Yang, William D. Shannon
 Maintainer: Berkley Shands <rpackages@biorankings.com>
 Depends: R (>= 3.1.0), dirmult
 Imports: ggplot2, stats, foreach, doParallel, MASS, vegan, gplots, rpart, rpart.plot, parallel, graphics, lattice
 Description: Using Dirichlet-Multinomial distribution to provide several functions for formal hypothesis testing, power and sample size calculations for human microbiome experiments.
 License: Apache License (== 2.0)
 LazyData: yes
+References: La Rosa PS, Brooks JP, Deych E, Boone EL, Edwards DJ, et al. (2012) <doi:10.1371/journal.pone.0052078>

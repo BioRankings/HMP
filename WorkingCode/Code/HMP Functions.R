@@ -135,8 +135,8 @@ Kullback.Leibler <- function(group.data, plot=TRUE, main="Kullback Leibler Diver
 		
 		tryCatch({
 					results <- foreach::foreach(i=1:numGrps, .combine=list, .multicombine=TRUE, .inorder=TRUE, .packages=c("dirmult")) %dopar%{
-						mle.param <- dirmult::dirmult(group.data[[i]], trace=FALSE)
-						return(mle.param)
+						param <- DM.MoM(group.data[[i]])
+						return(param)
 					}
 				}, finally = {
 					parallel::stopCluster(cl) # Close the parallel connections
@@ -145,15 +145,15 @@ Kullback.Leibler <- function(group.data, plot=TRUE, main="Kullback Leibler Diver
 	}else{
 		results <- vector("list", numGrps)
 		for(i in 1:numGrps)	
-			results[[i]] <- dirmult::dirmult(group.data[[i]], trace=FALSE)
+			results[[i]] <- DM.MoM(group.data[[i]])
 	}
 	
 	# Get alpha for every group
 	alpha <- lapply(results, function(x) x$gamma)
 	names(alpha) <- grpNames
 	
-	# Get LL given another alpha
-	LL.vals <- mapply(function(x, y) loglikDM(x, y), x=group.data, y=alpha)
+	# Get LL given alpha
+	LL.vals <- sapply(results, function(x) x$loglik)
 	
 	# Get LL for every group using another alpha
 	KLmat <- matrix(0, numGrps, numGrps)		
@@ -263,45 +263,67 @@ Est.PI <- function(group.data, conf=.95){
 	thetaMOM <- data.frame(matrix(0, numGroups, 3))
 	for(i in 1:numGroups){
 		tempData <- group.data[[i]]
+		
+		# Check the data has samples
+		numSub <- nrow(tempData)
+		if(numSub < 1)
+			stop("At least one data set in group.data is empty")
+		
 		tempParam1 <- data.frame(matrix(0, ncol(tempData), 6))
 		tempParam2 <- data.frame(matrix(0, ncol(tempData), 6))
+		
+		tempParam2[,2] <- grpNames[i]
+		tempParam1[,2] <- grpNames[i]
 		
 		# Check for taxa with 0 column sums (add 1 to everything if this happens)
 		badTaxa <- which(colSums(tempData) == 0)
 		if(length(badTaxa) != 0)
 			tempData <- tempData + 1
 		
-		# Get the MoM and MLE for every taxa
-		fsum <- dirmult::dirmult.summary(tempData, dirmult::dirmult(tempData, trace=FALSE))
-		tempTheta <- fsum[nrow(fsum),]
-		fsum <- fsum[-nrow(fsum),] 
-		
-		# Turn the summary into a data frame we can plot from
-		tempParam1[,1] <- rownames(fsum)
-		tempParam1[,2] <- grpNames[i]
-		tempParam1[,3] <- fsum$MLE
-		tempParam1[,4] <- fsum$se.MLE
-		tempTheta1 <- tempTheta[,2:3]
-		
-		tempParam2[,1] <- rownames(fsum)
-		tempParam2[,2] <- grpNames[i]
-		tempParam2[,3] <- fsum$MoM
-		tempParam2[,4] <- fsum$se.MOM
-		tempTheta2 <- tempTheta[,4:5]
-		
-		# Calc Upper and Lower bounds for CI
-		minSubj <- min(sapply(group.data, function(x) nrow(x)))
-		if(minSubj < 30){
-			val <- stats::qt(0.5 + conf *0.5, df=minSubj-1)
-		}else{
-			val <- stats::qnorm(0.5 + conf*0.5)
+		# Handle having 1 sample
+		if(numSub == 1){
+			tempParam1[,1] <- colnames(tempData)
+			tempParam1[,3] <- unlist(tempData[1,]/sum(tempData))
+			tempParam1[,4] <- NA
+			tempParam1[,5] <- tempParam1[,3]
+			tempParam1[,6] <- tempParam1[,3]
+			tempParam1 <- tempParam1[order(tempParam1[,1]),]
+			
+			tempTheta1 <- c(0, NA)
+			
+			tempParam2 <- tempParam1
+			tempTheta2 <- tempTheta1
+		}else{	
+			# Get the MoM and MLE for every taxa
+			fsum <- dirmult::dirmult.summary(tempData, dirmult::dirmult(tempData, trace=FALSE))
+			tempTheta <- fsum[nrow(fsum),]
+			fsum <- fsum[-nrow(fsum),] 
+			
+			# Turn the summary into a data frame we can plot from
+			tempParam1[,1] <- rownames(fsum)
+			tempParam1[,3] <- fsum$MLE
+			tempParam1[,4] <- fsum$se.MLE
+			tempTheta1 <- tempTheta[,2:3]
+			
+			tempParam2[,1] <- rownames(fsum)
+			tempParam2[,3] <- fsum$MoM
+			tempParam2[,4] <- fsum$se.MOM
+			tempTheta2 <- tempTheta[,4:5]
+			
+			# Calc Upper and Lower bounds for CI
+			minSubj <- min(sapply(group.data, function(x) nrow(x)))
+			if(minSubj < 30){
+				val <- stats::qt(0.5 + conf *0.5, df=minSubj-1)
+			}else{
+				val <- stats::qnorm(0.5 + conf*0.5)
+			}
+			
+			tempParam1[,5] <- tempParam1[,3] + val*tempParam1[,4]
+			tempParam1[,6] <- tempParam1[,3] - val*tempParam1[,4]
+			
+			tempParam2[,5] <- tempParam2[,3] + val*tempParam2[,4]
+			tempParam2[,6] <- tempParam2[,3] - val*tempParam2[,4]
 		}
-		
-		tempParam1[,5] <- tempParam1[,3] + val*tempParam1[,4]
-		tempParam1[,6] <- tempParam1[,3] - val*tempParam1[,4]
-		
-		tempParam2[,5] <- tempParam2[,3] + val*tempParam2[,4]
-		tempParam2[,6] <- tempParam2[,3] - val*tempParam2[,4]
 		
 		# Save outside of loop
 		allParamsMLE <- rbind(allParamsMLE, tempParam1)
@@ -420,77 +442,135 @@ Test.Paired <- function(group.data, numPerms=1000, parallel=FALSE, cores=3){
 	return(pval)
 }
 
-DM.Rpart <- function(data, covars, plot=TRUE, main="", minsplit=1, minbucket=1, cp=0){
+DM.Rpart <- function(data, covars, plot=TRUE, minsplit=1, minbucket=1, cp=0, numCV=10, numCon=100, parallel=FALSE, cores=3){
+	if(missing(data) || missing(covars))
+		stop("data and/or covars are missing.")
+	
+	if(numCV < 2){
+		ret <- DM.Rpart.Base(data, covars, plot, minsplit, minbucket, cp)
+	}else if(numCon < 2){
+		ret <- DM.Rpart.CV(data, covars, plot, minsplit, minbucket, cp, numCV)
+	}else{
+		ret <- DM.Rpart.CV.Consensus(data, covars, plot,  minsplit, minbucket, cp, numCV, numCon, parallel, cores)
+	}
+	
+	return(ret)
+}
+
+DM.Rpart.Base <- function(data, covars, plot=TRUE, minsplit=1, minbucket=1, cp=0){
 	if(missing(data) || missing(covars))
 		stop("data and/or covars are missing.")
 	
 	# Set the methods to use and call rpart
 	methods <- list(init=rpartInit, eval=rpartEval, split=rpartSplit)
-	res <- rpart::rpart(as.matrix(data) ~., data=covars, method=methods, minsplit=minsplit, minbucket=minbucket, cp=cp)
+	rpartRes <- rpart::rpart(as.matrix(data) ~., data=covars, method=methods, minsplit=minsplit, minbucket=minbucket, cp=cp)
+	
+	cpInfo <- rpartRes$cptable
+	size <- cpInfo[nrow(cpInfo), 2] + 1
+	
+	# Get split info from best tree
+	splits <- NULL
+	if(size > 1)
+		splits <- rpartCS(rpartRes)
 	
 	# Plot the rpart results
 	if(plot)
-		suppressWarnings(rpart.plot::rpart.plot(res, main=main, extra=1))
+		suppressWarnings(rpart.plot::rpart.plot(rpartRes, type=2, extra=101, box.palette=NA, branch.lty=3, shadow.col="gray", nn=FALSE))
 	
-	return(res)
+	return(list(cpTable=cpInfo, fullTree=rpartRes, bestTree=rpartRes, subTree=NULL, errorRate=NULL, size=size, splits=splits))
 }
 
-DM.Rpart.Perm <- function(data, covars, plot=TRUE, numPerms=1000, parallel=FALSE, cores=3, minsplit=1, minbucket=1, cp=0){
+DM.Rpart.CV <- function(data, covars, plot=TRUE, minsplit=1, minbucket=1, cp=0, numCV=10){
 	if(missing(data) || missing(covars))
 		stop("data and/or covars are missing.")
+	if(numCV < 2)
+		stop("numCV must be at least 2.")
 	
-	if(numPerms <= 0)
-		stop("The number of permutations must be an integer greater than 0.")
+	# Run initial Rpart
+	rpartBase <- DM.Rpart.Base(data, covars, FALSE, minsplit, minbucket, cp)
+	rpartRes <- rpartBase$fullTree
 	
-	numSub <- nrow(data) 
+	# Check for a valid starting tree
+	if(nrow(rpartRes$cptable) == 1){
+		warning("No splits in the data.")
+		return(rpartBase)
+	}
 	
-	# Run and prune an rpart tree with raw data
-	res <- DM.Rpart(data, covars, FALSE, "", minsplit, minbucket, cp)
-	rawResults <- pruneRpart(res, data, "Raw")
+	cvRes <- rpartCV(data, covars, rpartRes, minsplit, minbucket, numCV)
 	
-	### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-	# Run permutations
+	# Calculate the best tree
+	ciInfo <- cvRes$ciInfo
+	bestTreeLoc <- which(ciInfo[,4] == min(ciInfo[,4]))
+	bestTreeLoc <- bestTreeLoc[length(bestTreeLoc)]
+	size <- ciInfo[bestTreeLoc, 2] + 1
+	best <- rpart::prune(rpartRes, cp=ciInfo[bestTreeLoc, 1])
+	
+	# Get split info from best tree
+	splits <- NULL
+	if(size > 1)
+		splits <- rpartCS(best)
+	
+	if(plot)
+		suppressWarnings(rpart.plot::rpart.plot(best, type=2, extra=101, box.palette=NA, branch.lty=3, shadow.col="gray", nn=FALSE))
+	
+	return(list(cpTable=ciInfo, fullTree=rpartRes, bestTree=best, subTree=cvRes$subTree, errorRate=cvRes$errorRate, size=size, splits=splits))
+}
+
+DM.Rpart.CV.Consensus <- function(data, covars, plot=TRUE, minsplit=1, minbucket=1, cp=0, numCV=10, numCon=100, parallel=FALSE, cores=3){
+	if(missing(data) || missing(covars))
+		stop("data and/or covars are missing.")
+	if(numCV < 2)
+		stop("numCV must be at least 2.")
+	if(numCon < 2)
+		stop("numCon must be at least 2.")
+	
 	if(parallel){
-		cl <- parallel::makeCluster(min(cores, numPerms)) 
+		cl <- parallel::makeCluster(min(cores, numCon)) 
 		doParallel::registerDoParallel(cl)
-		tryCatch({ 
-					rpartPermRes <- foreach::foreach(i=1:numPerms, .combine=rbind, .multicombine=TRUE, .inorder=FALSE, .packages=c("rpart", "HMP")) %dopar%{
-						# Run and prune an rpart tree with permuted data                    
-						permData <- data[sample(numSub, numSub),, drop=FALSE]
-						resPerm <- DM.Rpart(permData, covars, FALSE, "", minsplit, minbucket, cp)
-						tempResults <- pruneRpart(resPerm, permData, i)
-						
-						return(tempResults)
+		
+		tryCatch({
+					results <- foreach::foreach(i=1:numCon, .combine=append, .multicombine=FALSE, .inorder=FALSE, .errorhandling="pass", .packages=c("rpart", "HMP")) %dopar%{
+						cvList <- DM.Rpart.CV(data, covars, FALSE, minsplit, minbucket, cp, numCV)
+						return(list(cvList))
 					}
 				}, finally = {
 					parallel::stopCluster(cl) # Close the parallel connections
 				}
 		)
 	}else{
-		rpartPermRes <- matrix(0, 0, 4)
-		for(i in 1:numPerms){
-			# Run and prune an rpart tree with permuted data
-			permData <- data[sample(numSub, numSub),, drop=FALSE]
-			resPerm <- DM.Rpart(permData, covars, FALSE, "", minsplit, minbucket, cp)
-			tempResults <- pruneRpart(resPerm, permData, i)
-			
-			rpartPermRes <- rbind(rpartPermRes, tempResults)
-		}
+		results <- vector("list", numCon)
+		for(i in 1:numCon)	
+			results[[i]] <- DM.Rpart.CV(data, covars, FALSE, minsplit, minbucket, cp, numCV)
 	}
 	
-	# Plot the permutations vs the real data
+	# Combine cv results
+	DtoMTab <- do.call("cbind", lapply(results, function(x){x$cpTable[,4]}))
+	RankTab <- do.call("cbind", lapply(results, function(x){x$cpTable[,8]}))
+	ciInfo <- cbind(
+			results[[1]]$cpTable[,1:3],
+			"MeanDtoM"=rowMeans(DtoMTab), 
+			"sdDtoM"=apply(DtoMTab, 1, sd), 
+			"MeanRank"=rowMeans(RankTab), 
+			"sdRank"=apply(RankTab, 1, sd)
+	)
+	
+	# Calculate the best tree
+	bestTreeLoc <- which(ciInfo[,4] == min(ciInfo[,4]))
+	bestTreeLoc <- bestTreeLoc[length(bestTreeLoc)]
+	size <- ciInfo[bestTreeLoc, 2] + 1
+	best <- rpart::prune(results[[1]]$fullTree, cp=ciInfo[bestTreeLoc, 1])
+	
+	# Get split info from best tree
+	splits <- rpartCS(best)
+	
 	if(plot)
-		plotRpartPerm(rawResults, rpartPermRes, numPerms)
+		suppressWarnings(rpart.plot::rpart.plot(best, type=2, extra=101, box.palette=NA, branch.lty=3, shadow.col="gray", nn=FALSE))
 	
-	# Calculate pvalues
-	pvals <- calcRpartPval(rawResults, rpartPermRes, numPerms)
-	
-	ret <- list(rawTree=res, rawPrune=rawResults, permPrune=rpartPermRes, pvals=pvals)
-	return(ret)
+	return(list(cpTable=ciInfo, fullTree=results[[1]]$fullTree, bestTree=best, subTree=NULL, errorRate=NULL, size=size, splits=splits))
 }
 
 Gen.Alg <- function(data, covars, iters=50, popSize=200, earlyStop=0, dataDist="euclidean", covarDist="gower", 
-		verbose=FALSE, plot=TRUE, minSolLen=NULL, maxSolLen=NULL, custCovDist=NULL){
+		verbose=FALSE, plot=TRUE, minSolLen=NULL, maxSolLen=NULL, custCovDist=NULL, penalty=0){
 	if(missing(data) || (missing(covars) && is.null(custCovDist)))
 		stop("data and/or covars are missing.")
 	
@@ -501,6 +581,8 @@ Gen.Alg <- function(data, covars, iters=50, popSize=200, earlyStop=0, dataDist="
 		stop("popSize must be an integer greater than 0")
 	if(earlyStop < 0)
 		stop("earlyStop must be an integer greater than or equal to 0")
+	if(penalty < 0 || penalty > 1)
+		stop("penalty must be between 0 and 1")
 	
 	# Check distances
 	if(dataDist != "euclidean" && dataDist != "gower")
@@ -510,9 +592,6 @@ Gen.Alg <- function(data, covars, iters=50, popSize=200, earlyStop=0, dataDist="
 	
 	# Define size
 	size <- ncol(data)
-	
-	# Not ready for use yet
-	penalty <- FALSE
 	
 	# Check stopping rules
 	if(!is.null(minSolLen))
@@ -685,6 +764,7 @@ Gen.Alg.Consensus <- function(data, covars, consensus=.5, numRuns=10, parallel=F
 	
 	return(list(solutions=bestSols, consSol=consSol, selectedIndex=selInd))
 }
+
 
 
 ### ~~~~~~~~~~~~~~~~~~~~~
@@ -871,6 +951,7 @@ Plot.RM.Dotplot <- function(group.data, groups, times, errorBars=TRUE, col=NULL,
 }
 
 
+
 ### ~~~~~~~~~~~~~~~~~~~~~
 ### Filter functions
 ### ~~~~~~~~~~~~~~~~~~~~~
@@ -993,6 +1074,7 @@ Data.filter <- function(data, order.type="data", minReads=0, numTaxa=NULL, perTa
 	
 	return(retData)
 }
+
 
 
 ### ~~~~~~~~~~~~~~~~~~~~~
@@ -1395,6 +1477,12 @@ Xdc.sevsample <- function(group.data, epsilon=10^(-4), est="mom"){
 ### ~~~~~~~~~~~~~~~~~~~~~
 ### Other functions
 ### ~~~~~~~~~~~~~~~~~~~~~
+kullbackLeiber <- function(data, plot=TRUE, parallel=FALSE, cores=3){
+	warning("This function has been spellchecked.  Please use 'Kullback.Leibler' instead.")
+	kl <- Kullback.Leibler(data, plot, parallel, cores)
+	return(kl)
+}
+
 loglikDM <- function(data, alphap){	
 	data <- data[,colSums(data) != 0, drop=FALSE]
 	alphap <- alphap[alphap != 0]
@@ -1426,14 +1514,14 @@ weirMoM <- function(data, MoM, se=FALSE){
 	return(list(theta=MoM.wh, se=std.er))
 }
 
-kullbackLeiber <- function(data, plot=TRUE, parallel=FALSE, cores=3){
-	warning("This function has been spellchecked.  Please use 'Kullback.Leibler' instead.")
-	kl <- Kullback.Leibler(data, plot, parallel, cores)
-	return(kl)
-}
-
 getBC <- function(data){
 	dataPer <- data/rowSums(data)
+	
+	### Remove any points with exactly the same values
+	dups <- duplicated(dataPer)
+	if(any(dups))
+		dataPer <- dataPer[!dups,]
+	
 	bcDist <- vegan::vegdist(dataPer, method="bray")
 	nonMetricMDS <- MASS::isoMDS(bcDist, trace=FALSE)
 	mdsPoints <- vegan::postMDS(nonMetricMDS$points, bcDist)
@@ -1488,7 +1576,7 @@ pioest <- function(group.data){
 ### ~~~~~~~~~~~~~~~~~~~~~
 ### ga functions
 ### ~~~~~~~~~~~~~~~~~~~~~
-gaScoring <- function(indices, covarDists, colDists, distType, penalty, minSolLen, maxSolLen) {
+gaScoring <- function(indices, covarDists, colDists, distType, lambda, minSolLen, maxSolLen) {
 	BAD_RETURN <- -2 # Return worse than cor could do
 	
 	numSel <- sum(indices)
@@ -1510,14 +1598,13 @@ gaScoring <- function(indices, covarDists, colDists, distType, penalty, minSolLe
 	# Combine the distance matrices based on distance type
 	if(distType == "gower"){
 		combinedSolDists <- Reduce("+", colDists[edges])/sum(indices)
-	}else{
+	}else if(distType == "euclidean"){
 		combinedSolDists <- sqrt(Reduce("+", colDists[edges]))
 	}
 	
 	# Get the correlation and penalize it based on the number of columns selected
 	mycor <- stats::cor(combinedSolDists, covarDists)
-	if(penalty)
-		mycor <- mycor * (length(indices)-sum(indices))/(length(indices)-1)
+	mycor <- mycor - (lambda * (sum(indices)/length(indices)))
 	
 	return(mycor)
 }
@@ -1570,7 +1657,7 @@ gaPlot <- function(evalSumm){
 ### ~~~~~~~~~~~~~~~~~~~~~
 rpartInit <- function(y, offset, parms, wt){
 	hmp.pkg.env$EVAL_COUNT_RPART <- 1	# reset eval counts
-	sfun <- function(yval, dev, wt, ylevel, digits ){
+	sfun <- function(yval, dev, wt, ylevel, digits){
 		paste(" mean=", round(mean(yval), 3), sep="")
 	}
 	environment(sfun) <- .GlobalEnv
@@ -1633,83 +1720,155 @@ rpartSplit <- function(y, wt, x, parms, continuous){
 	return(ret)
 }
 
-pruneRpart <- function(rpartResults, rpartData, iter){
-	# Turn data into abundance
-	abunData <- t(apply(rpartData, 1, function(x){x/sum(x)}))
+rpartCV <- function(data, covars, rpartRes, minsplit, minbucket, numCV){
+	# Pull out cp info
+	cpTable <- rpartRes$cptable
+	numCPLvls <- nrow(cpTable)
 	
-	# Pull out cp values for nodes
-	cp <- rpartResults$cp[,1]
-	relErr <- rpartResults$cp[,3]
-	
-	# Calculate within group distance and # of terminal nodes        
-	wDist <- rep(0, length(cp))
-	numLeafs <- rep(0, length(cp))
-	
-	# Run permuted data at every cp level
-	for(i in 1:length(cp)){
-		resTemp <- rpart::prune(rpartResults, cp[i] + 10^(-10)) # We need to add a tiny amount to cp due to rounding issues
+	# New cp for pruning
+	if(numCPLvls > 2){
+		oldCPs <- cpTable[,1]
 		
-		# Find all the leaf nodes
-		leafSplits <- unique(resTemp$where)
-		numLeafs[i] <- length(leafSplits)
+		cpTable[1, 1] <- Inf
+		cpTable[numCPLvls, 1] <- 0
+		for(m in 2:(numCPLvls-1))
+			cpTable[m, 1] <- sqrt(oldCPs[m] * oldCPs[m-1])
+	}
+	
+	# Set up groups for dropping data
+	numSub <- nrow(data)
+	dropNums <- cut(1:numSub, numCV, FALSE)
+	dropGrps <- sample(dropNums, numSub)
+	
+	errorRate <- vector("list", numCV)
+	subTree <- vector("list", numCV)
+	for(k in 1:numCV){
+		# Get location of data to drop
+		dropLoc <- which(dropGrps == k)
 		
-		# Calc distance within each leaf
-		for(j in 1:numLeafs[i]){
-			leafId <- which(resTemp$where == leafSplits[j])
-			if(length(leafId) == 1)
-				next
-			wDist[i] <- wDist[i] + sum(dist(abunData[leafId,]))
+		# Seperate dropped data
+		subData <- data[-dropLoc,, drop=FALSE]
+		dropData <- data[dropLoc,, drop=FALSE]
+		
+		# Seperate dropped covars
+		subCovs <- covars[-dropLoc,, drop=FALSE]
+		dropCovs <- covars[dropLoc,, drop=FALSE]
+		
+		# Run rpart on smaller data
+		subRpartBase <- DM.Rpart.Base(subData, subCovs, FALSE, minsplit, minbucket)
+		subRpartRes <- subRpartBase$fullTree
+		
+		# Need to be abandance for later code
+		subData <- subData/(rowSums(subData))
+		dropData <- dropData/(rowSums(dropData))
+		
+		# Calculate relative error
+		dist <- NULL
+		subTree[[k]] <- vector("list", numCPLvls)
+		for(i in 1:numCPLvls){
+			subTree[[k]][[i]] <-  rpart::prune(subRpartRes, cp=cpTable[i, 1])
+			pruneSubTree <- subTree[[k]][[i]]
+			subPre <- predict(pruneSubTree, newdata=subCovs, type="vector")
+			dropPre <- predict(pruneSubTree, newdata=dropCovs, type="vector")
+			
+			## 1.a. Distance: new subject to the mean Taxa in the signed Terminal node
+			tempDist <- 0
+			for(j in 1:length(dropPre))
+				tempDist <- tempDist + (dist(rbind(dropData[j,], colMeans(subData[subPre == dropPre[j],]))))^2
+			
+			dist[i] <- tempDist/length(dropPre)
+		}
+		
+		error <- data.frame(DtoM=dist)
+		rownames(error) <- cpTable[,2] + 1
+		errorRate[[k]] <- error
+	}
+	
+	# Calculate the square root of the errors
+	erSqrt <- lapply(errorRate, sqrt)
+	error <- do.call("cbind", erSqrt)
+	
+	# Pull out only the distance to the mean
+	loc <- which(colnames(error) == "DtoM")
+	errorDM <- as.matrix(error[,loc])
+	
+	# Calculate CI of DtoM
+	ciInfo <- matrix(NA, numCPLvls, 4)
+	for(j in 1:numCPLvls){
+		ciInfo[j, 1] <- mean(errorDM[j,])
+		ciInfo[j, 2:3] <- rpartCI(errorDM[j,], 0.95)
+		ciInfo[j, 4] <- sd(errorDM[j,])/sqrt(ncol(errorDM))
+	}
+	
+	ciInfo <- cbind(ciInfo, rank(ciInfo[,1]))
+	colnames(ciInfo) <- c("DtoM", "SE", "Lower", "Upper", "Rank")
+	
+	# Add ci info back into cp table
+	cpTable2 <- cbind(rpartRes$cptable, ciInfo)
+	
+	return(list(subTree=subTree, errorRate=errorRate, ciInfo=cpTable2))
+}
+
+rpartCI <- function(vector, interval) {
+	vec_sd <- sd(vector)
+	numSamp <- length(vector)
+	vec_mean <- mean(vector)
+	
+	# Error according to t distribution
+	error <- qt((interval + 1)/2, df = numSamp - 1) * vec_sd/sqrt(numSamp)
+	
+	# Confidence interval as a vector
+	res <- c("Lower"=vec_mean - error, "Upper"=vec_mean + error)
+	return(res)
+}
+
+rpartCS <- function(fit) {
+	# Pull out split information
+	splitNames <- rownames(fit$splits)
+	allVars <- colnames(attributes(fit$terms)$factors)  
+	
+	# Rename splits to fit into data frame
+	rownames(fit$splits) <- 1:nrow(fit$splits)
+	splits <- data.frame(fit$splits)
+	splits$var <- splitNames
+	splits$type <- ""
+	splits$primary <- ""
+	
+	# Get the frame
+	frame <- as.data.frame(fit$frame)
+	frame$var <- as.character(frame$var)
+	primeFr <- frame[frame$var != "<leaf>",]
+	
+	# Go through every node and check competing and surrogaet splits
+	index <- 0
+	for(i in 1:nrow(primeFr)){
+		spltPrimName <- paste("Split", primeFr$yval[i], primeFr$var[i])
+		
+		# Fill in primary info
+		index <- index + 1
+		splits$type[index] <- "primary"
+		splits$primary[index] <- spltPrimName
+		
+		# Check for competing splits
+		if(primeFr$ncompete[i] > 0){
+			for(j in 1:primeFr$ncompete[i]){
+				index <- index + 1
+				splits$type[index] <- "competing"
+				splits$primary[index] <- spltPrimName
+			}
+		}
+		
+		# Check for surrogate splits
+		if(primeFr$nsurrogate[i] > 0){
+			for(j in 1:primeFr$nsurrogate[i]){
+				index <- index + 1
+				splits$type[index] <- "surrogate"
+				splits$primary[index] <- spltPrimName
+			}
 		}
 	}
-	tempResults <- data.frame(Tree=paste("Tree", iter), CP=cp, Leafs=numLeafs, WDist=wDist, RelErr=relErr)
 	
-	return(tempResults)
-}
-
-plotRpartPerm <- function(rawResults, rpartPermRes, numPerms){
-	# Combine perms with real data
-	allData <- rbind(rawResults, rpartPermRes)
-	rownames(allData) <- 1:nrow(allData)
-	
-	par(mar=c(5, 4, 4, 5) + .1)
-	
-	# Make the inital plot
-	plot(NULL, type="b", main="Number of Leaves vs Within Group Distance", lwd=2, 
-			xlab="Number of Terminal Nodes", 
-			ylab="Within Group Distance", 
-			xlim=range(allData$Leafs, na.rm=TRUE, finite=TRUE),
-			ylim=range(allData$WDist, na.rm=TRUE, finite=TRUE)
-	)
-	# Add all permutation results
-	for(i in 1:numPerms){
-		tempData <- rpartPermRes[rpartPermRes$Tree == unique(rpartPermRes$Tree)[i],]
-		lines(tempData$Leafs, tempData$WDist, col="red", lty=2)
-	}
-	# Draw raw line
-	lines(rawResults$Leafs, rawResults$WDist, col="black", type="b", pch=16, lwd=3)
-}
-
-calcRpartPval <- function(rawResults, rpartPermRes, numPerms){
-	# Approx values for permuted trees based on our real tree
-	treeNames <- levels(rpartPermRes$Tree)
-	pvalData <- matrix(NA, nrow(rawResults), numPerms)
-	colnames(pvalData) <- treeNames
-	for(i in 1:numPerms){
-		id <- which(rpartPermRes$Tree == treeNames[i])
-		if(length(id) <= 1) # Skip any 1 node trees
-			next
-		temp <- stats::approx(rpartPermRes$Leafs[id], rpartPermRes$WDist[id], rawResults$Leafs)$y
-#		pvalData[,i] <- -c(0, diff(temp)/diff(rawResults$Leafs))
-		pvalData[,i] <- temp
-	}
-	
-	# Calculate P-value
-#	slope <- -c(0, diff(rawResults$WDist)/diff(rawResults$Leafs))
-#	pval <- rowMeans(slope <= pvalData, na.rm=TRUE)
-	pval <- rowMeans(rawResults$WDist> pvalData, na.rm=TRUE)
-	pval <- ifelse(is.na(pval), 0, pval)
-	
-	return(pval)
+	return(splits)
 }
 
 
@@ -1990,39 +2149,6 @@ Xdc.statistics.Hnull.Ha <- function(alphap, group.Nrs, type, est){
 }
 
 
-
-
-
-
-### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-### Unused
-### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-#Xoc.statistics.MoM <- function(group.data){
-#	numGroups <- length(group.data)
-#	
-#	# Get the theta from the fit assuming all in the same group
-#	groupDataC <- do.call(rbind, group.data)
-#	groupFit <- DM.MoM(groupDataC)
-#	groupTheta <- groupFit$theta
-#	
-#	# Get the loglik from the fit from every data set
-#	# Also get the loglik if thetas were equal
-#	logliks <- rep(0, numGroups)
-#	equalThetaLogliks <- rep(0, numGroups)
-#	for(i in 1:numGroups){
-#		tempTheta <- DM.MoM(group.data[[i]])$theta
-#		fit <- dirmult::dirmult(group.data[[i]], initscalar=(1-tempTheta)/tempTheta, epsilon=epsilon, trace=FALSE)
-#		logliks[i] <- fit$loglik
-#		
-#		equalThetaLogliks[i] <- loglikDM(group.data[[i]], fit$pi*(1-groupTheta)/groupTheta)	
-#	}
-#	
-#	# Calculate the xoc
-#	xoc <- -2*(sum(equalThetaLogliks)-sum(logliks))	
-#	
-#	return(xoc)
-#}
 
 
 
