@@ -8,14 +8,14 @@
 
 \usage{
 	MC.Xmcupo.statistics(group.Nrs, numMC = 10, pi0, group.pi, group.theta, 
-	type = "ha", siglev = 0.05, MC = NULL, Nrs = NULL)
+		type = "ha", siglev = 0.05)
 }
 
 \arguments{
   \item{group.Nrs}{A list specifying the number of reads/sequence depth for each sample in a group with one group per list entry.}
   \item{numMC}{Number of Monte-Carlo experiments.  In practice this should be at least 1,000.}
-  \item{pi0}{The RAD-probability mean vector.}
-  \item{group.pi}{
+  \item{pi0}{The RAD-probability mean vector. This is ignored when type=\code{"ha"}}
+  \item{group.pi}{  		
 		If \code{"hnull"}: This argument is ignored. \cr
 		If \code{"ha"}: A matrix where each row is a vector pi values for each group.}
   \item{group.theta}{A vector of overdispersion values for each group.}
@@ -23,8 +23,6 @@
 		If \code{"hnull"}: Computes the size of the test.\cr
 		If \code{"ha"}: Computes the power of the test. (default)}
   \item{siglev}{Significance level for size of the test / power calculation. The default is 0.05.}
-  \item{MC}{Deprecated. Replaced with numMC for clarity.}
-  \item{Nrs}{Deprecated. Replaced with group.Nrs for clarity.}
 }
 
 \value{Size of the test statistics (under \code{"hnull"}) or power (under \code{"ha"}) of the test.}
@@ -57,7 +55,6 @@
 	pi0 <- fit.saliva$pi
 	
 	### Computing size of the test statistics (Type I error)
-	group.theta <- c(fit.throat$theta, fit.tonsils$theta)
 	pval1 <- MC.Xmcupo.statistics(group.Nrs, numMC, pi0, group.theta=group.theta, type="hnull")
 	pval1
 	
