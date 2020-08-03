@@ -1,10 +1,10 @@
-DM.Rpart.Base <-
+DM.Rpart.Base.Old <-
 function(data, covars, plot=TRUE, minsplit=1, minbucket=1, cp=0){
 	if(missing(data) || missing(covars))
 		stop("data and/or covars are missing.")
 	
 	# Set the methods to use and call rpart
-	methods <- list(init=rpartInit, eval=rpartEval, split=rpartSplit)
+	methods <- list(init=rpartInit, eval=rpartEval, split=rpartSplitOld)
 	rpartRes <- rpart::rpart(as.matrix(data) ~., data=covars, method=methods, minsplit=minsplit, minbucket=minbucket, cp=cp)
 	
 	cpInfo <- rpartRes$cptable
