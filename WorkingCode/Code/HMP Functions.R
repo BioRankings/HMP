@@ -442,16 +442,16 @@ Test.Paired <- function(group.data, numPerms=1000, parallel=FALSE, cores=3){
 	return(pval)
 }
 
-DM.Rpart <- function(data, covars, plot=TRUE, minsplit=1, minbucket=1, cp=0, numCV=10, numCon=100, parallel=FALSE, cores=3){
+DM.Rpart <- function(data, covars, plot=TRUE, minsplit=1, minbucket=1, cp=0, numCV=10, numCon=100, parallel=FALSE, cores=3, use1SE=FALSE, lowerSE=TRUE){
 	if(missing(data) || missing(covars))
 		stop("data and/or covars are missing.")
 	
 	if(numCV < 2){
 		ret <- DM.Rpart.Base(data, covars, plot, minsplit, minbucket, cp)
 	}else if(numCon < 2){
-		ret <- DM.Rpart.CV(data, covars, plot, minsplit, minbucket, cp, numCV)
+		ret <- DM.Rpart.CV(data, covars, plot, minsplit, minbucket, cp, numCV, parallel, cores, use1SE, lowerSE)
 	}else{
-		ret <- DM.Rpart.CV.Consensus(data, covars, plot,  minsplit, minbucket, cp, numCV, numCon, parallel, cores)
+		ret <- DM.Rpart.CV.Consensus(data, covars, plot, minsplit, minbucket, cp, numCV, numCon, parallel, cores, use1SE, lowerSE)
 	}
 	
 	return(ret)
@@ -480,7 +480,7 @@ DM.Rpart.Base <- function(data, covars, plot=TRUE, minsplit=1, minbucket=1, cp=0
 	return(list(cpTable=cpInfo, fullTree=rpartRes, bestTree=rpartRes, subTree=NULL, errorRate=NULL, size=size, splits=splits))
 }
 
-DM.Rpart.CV <- function(data, covars, plot=TRUE, minsplit=1, minbucket=1, cp=0, numCV=10){
+DM.Rpart.CV <- function(data, covars, plot=TRUE, minsplit=1, minbucket=1, cp=0, numCV=10, parallel=FALSE, cores=3, use1SE=FALSE, lowerSE=TRUE){
 	if(missing(data) || missing(covars))
 		stop("data and/or covars are missing.")
 	if(numCV < 2)
@@ -496,12 +496,33 @@ DM.Rpart.CV <- function(data, covars, plot=TRUE, minsplit=1, minbucket=1, cp=0, 
 		return(rpartBase)
 	}
 	
-	cvRes <- rpartCV(data, covars, rpartRes, minsplit, minbucket, numCV)
+	cvRes <- rpartCV(data, covars, rpartRes, minsplit, minbucket, numCV, parallel, cores)
 	
 	# Calculate the best tree
-	ciInfo <- cvRes$ciInfo
-	bestTreeLoc <- which(ciInfo[,4] == min(ciInfo[,4]))
-	bestTreeLoc <- bestTreeLoc[length(bestTreeLoc)]
+	ciInfo <- as.data.frame(cvRes$ciInfo)
+	
+	# Find the tree with the lowest MSE
+	minMSE <- min(ciInfo$MSE)
+	lowestMSELoc <- which(ciInfo$MSE == minMSE)[1]
+	
+	if(use1SE){	
+		# Find which trees are within 1 SE of the lowest mse tree
+		cutoffU <- ciInfo$MSE[lowestMSELoc] + ciInfo$SE[lowestMSELoc]
+		cutoffL <- ciInfo$MSE[lowestMSELoc] - ciInfo$SE[lowestMSELoc]
+		ciInfo$within1SE <- ifelse(ciInfo$MSE <= cutoffU & ciInfo$MSE >= cutoffL, 1, 0)   
+		
+		# Find the smallest/biggest tree within 1 SE
+		within <- which(ciInfo$within1SE == 1)
+		if(lowerSE){
+			bestTreeLoc <- min(within)
+		}else{
+			bestTreeLoc <- max(within)
+		}
+	}else{
+		bestTreeLoc <- lowestMSELoc
+	}
+	
+	# Pull out the best tree
 	size <- ciInfo[bestTreeLoc, 2] + 1
 	best <- rpart::prune(rpartRes, cp=ciInfo[bestTreeLoc, 1])
 	
@@ -516,7 +537,7 @@ DM.Rpart.CV <- function(data, covars, plot=TRUE, minsplit=1, minbucket=1, cp=0, 
 	return(list(cpTable=ciInfo, fullTree=rpartRes, bestTree=best, subTree=cvRes$subTree, errorRate=cvRes$errorRate, size=size, splits=splits))
 }
 
-DM.Rpart.CV.Consensus <- function(data, covars, plot=TRUE, minsplit=1, minbucket=1, cp=0, numCV=10, numCon=100, parallel=FALSE, cores=3){
+DM.Rpart.CV.Consensus <- function(data, covars, plot=TRUE, minsplit=1, minbucket=1, cp=0, numCV=10, numCon=100, parallel=FALSE, cores=3, use1SE=FALSE, lowerSE=TRUE){
 	if(missing(data) || missing(covars))
 		stop("data and/or covars are missing.")
 	if(numCV < 2)
@@ -530,7 +551,7 @@ DM.Rpart.CV.Consensus <- function(data, covars, plot=TRUE, minsplit=1, minbucket
 		
 		tryCatch({
 					results <- foreach::foreach(i=1:numCon, .combine=append, .multicombine=FALSE, .inorder=FALSE, .errorhandling="pass", .packages=c("rpart", "HMP")) %dopar%{
-						cvList <- DM.Rpart.CV(data, covars, FALSE, minsplit, minbucket, cp, numCV)
+						cvList <- DM.Rpart.CV(data, covars, FALSE, minsplit, minbucket, cp, numCV, FALSE, 1, use1SE, lowerSE)
 						return(list(cvList))
 					}
 				}, finally = {
@@ -540,28 +561,32 @@ DM.Rpart.CV.Consensus <- function(data, covars, plot=TRUE, minsplit=1, minbucket
 	}else{
 		results <- vector("list", numCon)
 		for(i in 1:numCon)	
-			results[[i]] <- DM.Rpart.CV(data, covars, FALSE, minsplit, minbucket, cp, numCV)
+			results[[i]] <- DM.Rpart.CV(data, covars, FALSE, minsplit, minbucket, cp, numCV, FALSE, 1, use1SE, lowerSE)
 	}
 	
 	# Combine cv results
-	DtoMTab <- do.call("cbind", lapply(results, function(x){x$cpTable[,4]}))
-	RankTab <- do.call("cbind", lapply(results, function(x){x$cpTable[,8]}))
+	MSETab <- do.call("cbind", lapply(results, function(x){x$cpTable[,4]}))
+	rankTab <- do.call("cbind", lapply(results, function(x){x$cpTable[,8]}))
 	ciInfo <- cbind(
 			results[[1]]$cpTable[,1:3],
-			"MeanDtoM"=rowMeans(DtoMTab), 
-			"sdDtoM"=apply(DtoMTab, 1, sd), 
-			"MeanRank"=rowMeans(RankTab), 
-			"sdRank"=apply(RankTab, 1, sd)
+			"MeanMSE"=rowMeans(MSETab), 
+			"sdMSE"=apply(MSETab, 1, sd), 
+			"MeanRank"=rowMeans(rankTab), 
+			"sdRank"=apply(rankTab, 1, sd)
 	)
 	
-	# Calculate the best tree
-	bestTreeLoc <- which(ciInfo[,4] == min(ciInfo[,4]))
-	bestTreeLoc <- bestTreeLoc[length(bestTreeLoc)]
+	# Find the tree with the lowest MSE
+	minMSE <- min(ciInfo$MeanMSE)
+	bestTreeLoc <- which(ciInfo$MeanMSE == minMSE)[1]
+	
+	# Pull out the best tree
 	size <- ciInfo[bestTreeLoc, 2] + 1
 	best <- rpart::prune(results[[1]]$fullTree, cp=ciInfo[bestTreeLoc, 1])
 	
 	# Get split info from best tree
-	splits <- rpartCS(best)
+	splits <- NULL
+	if(size > 1)
+		splits <- rpartCS(best)
 	
 	if(plot)
 		suppressWarnings(rpart.plot::rpart.plot(best, type=2, extra=101, box.palette=NA, branch.lty=3, shadow.col="gray", nn=FALSE))
@@ -790,9 +815,9 @@ Plot.PI <- function(estPi, errorBars=TRUE, logScale=FALSE, main="PI Vector", yla
 	# Make the base plot
 	piPlot <- ggplot2::ggplot(estPi$params, ggplot2::aes_string(y="PI", x="Taxa", colour="Group")) +
 			ggplot2::geom_point() + 
-			ggplot2::theme(legend.position = "top") +
+			ggplot2::theme(legend.position = "top", text=ggplot2::element_text(size=15)) +
 			ggplot2::labs(title=main, y=ylab, x="") +
-			ggplot2::theme(axis.text.x=ggplot2::element_text(hjust=1, angle=45, size=6))
+			ggplot2::theme(axis.text.x=ggplot2::element_text(hjust=1, angle=45, size=10))
 	
 	# Add error bars
 	if(errorBars){
@@ -950,18 +975,40 @@ Plot.RM.Dotplot <- function(group.data, groups, times, errorBars=TRUE, col=NULL,
 	}
 }
 
+Plot.Theta <- function(estPi, main="Theta by Group"){
+	if(missing(estPi))
+		stop("estPi is missing.")
+	
+	# Create the theta table
+	theta <- estPi$theta
+	thetaci <- cbind(
+			theta, 
+			lci = theta[,2] - 1.96*theta[,3],
+			lci = theta[,2] + 1.96*theta[,3]
+	)
+	thetaci <- thetaci[order(thetaci[2]),]
+	
+	xlim <- range(thetaci[,c(4, 5)])
+	
+	# Plot the tornado plot
+	plot(thetaci[,2], 1:nrow(theta), pch=16, yaxt="n", xlim=xlim,
+			main=main, ylab="", xlab="Theta +/- 95% CI")
+	
+	grid(ny=15, lwd=2)
+	axis(2, at=1:nrow(theta), labels=thetaci[,1])
+	
+	for (i in 1:nrow(theta)) 
+		lines(c(thetaci[i, 4], thetaci[i, 5]), c(i, i))
+}
+
 
 
 ### ~~~~~~~~~~~~~~~~~~~~~
 ### Filter functions
 ### ~~~~~~~~~~~~~~~~~~~~~
-formatDataSets <- function(group.data, data=NULL){
-	if(missing(group.data) && is.null(data))
+formatDataSets <- function(group.data){
+	if(missing(group.data))
 		stop("group.data missing.")
-	
-	# Check if data is still being used
-	if(!is.null(data) && missing(group.data))
-		group.data <- data
 	
 	# Make sure we have more than 1 data set
 	numGroups <- length(group.data)
@@ -1007,35 +1054,25 @@ formatDataSets <- function(group.data, data=NULL){
 	return(retData)
 }
 
-Data.filter <- function(data, order.type="data", minReads=0, numTaxa=NULL, perTaxa=NULL, K=NULL, reads.crit=NULL){
+Data.filter <- function(data, order.type="data", minReads=0, numTaxa=NULL, perTaxa=NULL){
 	if(missing(data))
 		stop("data is missing.")
 	if(tolower(order.type) != "data" && tolower(order.type) != "sample")
 		stop(sprintf("'%s' not recognized, order.type must be 'data' or 'sample'", as.character(order.type)))
 	
-	# Check if K is still being used
-	if(is.null(numTaxa) && !is.null(K)){
-		warning("'K' is deprecated. It has been replaced with numTaxa. View the help files for details.")
-		numTaxa <- K
-	}
-	
-	# Check if reads.crit is still being used
-	if(!is.null(reads.crit)){
-		warning("'reads.crit' is deprecated. It has been replaced with minReads. View the help files for details.")
-		minReads <- reads.crit
-	}
-	
 	# Check if numTaxa or perTaxa is being used
 	if(!is.null(numTaxa) && !is.null(perTaxa))
 		stop("numTaxa and perTaxa cannot be used at the same time")
 	if(!is.null(numTaxa)){
-		if(numTaxa >= ncol(data) || numTaxa <= 0)
-			stop(sprintf("numTaxa must be between 0 and %i.", ncol(data)-1))
+		if(numTaxa > ncol(data) || numTaxa <= 0)
+			stop(sprintf("numTaxa must be between 0 and %i.", ncol(data)))
 	}
 	if(!is.null(perTaxa)){
 		if(perTaxa >= 1 || perTaxa <= 0)
 			stop("perTaxa must be between 0 and 1.")
 	}
+	if(is.null(numTaxa) && is.null(perTaxa))
+		numTaxa <- ncol(data)
 	
 	taxaNames <- colnames(data)
 	
@@ -1066,11 +1103,15 @@ Data.filter <- function(data, order.type="data", minReads=0, numTaxa=NULL, perTa
 		}
 	}
 	
-	# Pull out the taxa we want to collapse
-	otherData <- data[,-c(1:numTaxa), drop=FALSE]
-	
-	# Put the data back together and relabel
-	retData <- cbind(data[,1:numTaxa], Other=rowSums(otherData))
+	if(numTaxa >= ncol(data)){
+		retData <- data
+	}else{
+		# Pull out the taxa we want to collapse
+		otherData <- data[,-c(1:numTaxa), drop=FALSE]
+		
+		# Put the data back together and relabel
+		retData <- cbind(data[,1:numTaxa], Other=rowSums(otherData))
+	}
 	
 	return(retData)
 }
@@ -1080,17 +1121,11 @@ Data.filter <- function(data, order.type="data", minReads=0, numTaxa=NULL, perTa
 ### ~~~~~~~~~~~~~~~~~~~~~
 ### MC functions
 ### ~~~~~~~~~~~~~~~~~~~~~
-MC.ZT.statistics <- function(Nrs, numMC=10, fit, type="ha", siglev=0.05, MC=NULL) {
+MC.ZT.statistics <- function(Nrs, numMC=10, fit, type="ha", siglev=0.05) {
 	if(missing(Nrs) || missing(fit))
 		stop("Nrs and/or fit missing.")
 	if(tolower(type) != "ha" && tolower(type) != "hnull")
 		stop(sprintf("Type '%s' not found. Type must be 'ha' for power or 'hnull' for size.\n", as.character(type)))
-	
-	# Check if someone is still using MC
-	if(!is.null(MC)){
-		warning("'MC' is deprecated. It has been replaced with numMC. View the help files for details.")
-		numMC <- MC
-	}
 	
 	# Get all the ZT values
 	ZTstatMatrix <- matrix(0, numMC, 2)
@@ -1113,19 +1148,13 @@ MC.ZT.statistics <- function(Nrs, numMC=10, fit, type="ha", siglev=0.05, MC=NULL
 	return(cbind(zpval, tpval))
 }
 
-MC.Xsc.statistics <- function(Nrs, numMC=10, fit, pi0=NULL, type="ha", siglev=0.05, MC=NULL) {
+MC.Xsc.statistics <- function(Nrs, numMC=10, fit, pi0=NULL, type="ha", siglev=0.05) {
 	if(missing(Nrs) || missing(fit))
 		stop("Nrs and/or fit missing.")
 	if(is.null(pi0) && tolower(type) == "ha")
 		stop("pi0 cannot be null with type 'ha'.")
 	if(tolower(type) != "ha" && tolower(type) != "hnull")
 		stop(sprintf("Type '%s' not found. Type must be 'ha' for power or 'hnull' for size.\n", as.character(type)))
-	
-	# Check if someone is still using MC
-	if(!is.null(MC)){
-		warning("'MC' is deprecated. It has been replaced with numMC. View the help files for details.")
-		numMC <- MC
-	}
 	
 	# Get all the XSC values
 	XscStatVector <- rep(0, numMC)
@@ -1144,25 +1173,13 @@ MC.Xsc.statistics <- function(Nrs, numMC=10, fit, pi0=NULL, type="ha", siglev=0.
 	return(pval)
 }
 
-MC.Xmc.statistics <- function(group.Nrs, numMC=10, pi0, group.pi, group.theta, type="ha", siglev=0.05, MC=NULL, Nrs=NULL) {
-	# Check if someone is still using Nrs
-	if(!is.null(Nrs)){
-		warning("'Nrs' is deprecated. It has been replaced with group.Nrs. View the help files for details.")
-		group.Nrs <- Nrs
-	}
-	
+MC.Xmc.statistics <- function(group.Nrs, numMC=10, pi0, group.pi, group.theta, type="ha", siglev=0.05) {
 	if(missing(group.theta) || missing(pi0) || missing(group.Nrs))
 		stop("group.Nrs, pi0 and/or group.theta missing.")
 	if(missing(group.pi) && tolower(type) == "ha")
 		stop("group.pi missing.")
 	if(tolower(type) != "ha" && tolower(type) != "hnull")
 		stop(sprintf("Type '%s' not found. Type must be 'ha' for power or 'hnull' for size.\n", as.character(type)))
-	
-	# Check if someone is still using MC
-	if(!is.null(MC)){
-		warning("'MC' is deprecated. It has been replaced with numMC. View the help files for details.")
-		numMC <- MC
-	}
 	
 	numGroups <- length(group.Nrs)
 	numTaxa <- length(pi0)
@@ -1192,13 +1209,7 @@ MC.Xmc.statistics <- function(group.Nrs, numMC=10, pi0, group.pi, group.theta, t
 	return(pval)
 }
 
-MC.Xmcupo.statistics <- function(group.Nrs, numMC=10, pi0, group.pi, group.theta, type="ha", siglev=0.05, MC=NULL, Nrs=NULL) {
-	# Check if someone is still using Nrs
-	if(!is.null(Nrs)){
-		warning("'Nrs' is deprecated. It has been replaced with group.Nrs. View the help files for details.")
-		group.Nrs <- Nrs
-	}
-	
+MC.Xmcupo.statistics <- function(group.Nrs, numMC=10, pi0, group.pi, group.theta, type="ha", siglev=0.05) {
 	if(missing(group.theta) || missing(group.Nrs))
 		stop("group.Nrs and/or group.theta missing.")
 	if(missing(group.pi) && tolower(type) == "ha")
@@ -1207,12 +1218,6 @@ MC.Xmcupo.statistics <- function(group.Nrs, numMC=10, pi0, group.pi, group.theta
 		stop("pi0 missing.")
 	if(tolower(type) != "ha" && tolower(type) != "hnull")
 		stop(sprintf("Type '%s' not found. Type must be 'ha' for power or 'hnull' for size.\n", as.character(type)))
-	
-	# Check if someone is still using MC
-	if(!is.null(MC)){
-		warning("'MC' is deprecated. It has been replaced with numMC. View the help files for details.")
-		numMC <- MC
-	}
 	
 	numGroups <- length(group.Nrs)
 	
@@ -1243,25 +1248,13 @@ MC.Xmcupo.statistics <- function(group.Nrs, numMC=10, pi0, group.pi, group.theta
 	return(pval)
 }
 
-MC.Xdc.statistics <- function(group.Nrs, numMC=10, alphap, type="ha", siglev=0.05, est="mom", MC=NULL, Nrs=NULL) {
-	# Check if someone is still using Nrs
-	if(!is.null(Nrs)){
-		warning("'Nrs' is deprecated. It has been replaced with group.Nrs. View the help files for details.")
-		group.Nrs <- Nrs
-	}
-	
+MC.Xdc.statistics <- function(group.Nrs, numMC=10, alphap, type="ha", siglev=0.05, est="mom") {
 	if(missing(alphap) || missing(group.Nrs))
 		stop("group.Nrs and/or alphap  missing.")
 	if(tolower(type) != "ha" && tolower(type) != "hnull")
 		stop(sprintf("Type '%s' not found. Type must be 'ha' for power or 'hnull' for size.\n", as.character(type)))
 	if(tolower(est) != "mom" && tolower(est) != "mle")
 		stop(sprintf("Est '%s' not found. Est must be 'mle' or 'mom'.", as.character(est)))
-	
-	# Check if someone is still using MC
-	if(!is.null(MC)){
-		warning("'MC' is deprecated. It has been replaced with numMC. View the help files for details.")
-		numMC <- MC
-	}
 	
 	numGroups <- length(group.Nrs)	
 	
@@ -1285,23 +1278,11 @@ MC.Xdc.statistics <- function(group.Nrs, numMC=10, alphap, type="ha", siglev=0.0
 	return(pval)
 }
 
-MC.Xoc.statistics <- function(group.Nrs, numMC=10, group.alphap, type="ha", siglev=0.05, MC=NULL, Nrs=NULL) {
-	# Check if someone is still using Nrs
-	if(!is.null(Nrs)){
-		warning("'Nrs' is deprecated. It has been replaced with group.Nrs. View the help files for details.")
-		group.Nrs <- Nrs
-	}
-	
+MC.Xoc.statistics <- function(group.Nrs, numMC=10, group.alphap, type="ha", siglev=0.05) {
 	if(missing(group.alphap) || missing(group.Nrs))
 		stop("group.Nrs and/or group.alphap missing.")
 	if(tolower(type) != "ha" && tolower(type) != "hnull")
 		stop(sprintf("Type '%s' not found. Type must be 'ha' for power or 'hnull' for size.\n", as.character(type)))
-	
-	# Check if someone is still using MC
-	if(!is.null(MC)){
-		warning("'MC' is deprecated. It has been replaced with numMC. View the help files for details.")
-		numMC <- MC
-	}
 	
 	numGroups <- length(group.Nrs)	
 	
@@ -1682,22 +1663,25 @@ rpartSplit <- function(y, wt, x, parms, continuous){
 	# Get initial LL
 	LL <- DM.MoM(y)$loglik
 	
+	uniqX <- sort(unique(x))
+	numUni <- length(uniqX) - 1
+	
 	# Determine what we are comparing
 	if(continuous){
 		numTests <- length(x) - 1
 		dir <- rep(-1, numTests)
 	}else{
-		uniqX <- sort(unique(x))
-		numTests <- length(uniqX) - 1
+		numTests <- numUni
 		dir <- uniqX
 	}
 	
 	# Run through every comparison
 	LRT <- rep(0, numTests)
-	for(i in 1:numTests){
+	for(i in 1:numUni){
 		if(continuous){
-			grp1 <- y[1:i,, drop=FALSE]
-			grp2 <- y[-c(1:i),, drop=FALSE]
+			id <- which(x <= uniqX[i])
+			grp1 <- y[id,, drop=FALSE]
+			grp2 <- y[-id,, drop=FALSE]
 		}else{
 			grp1 <- y[x == uniqX[i],, drop=FALSE]
 			grp2 <- y[x != uniqX[i],, drop=FALSE]
@@ -1713,14 +1697,18 @@ rpartSplit <- function(y, wt, x, parms, continuous){
 		if(LLgrp1 == Inf || LLgrp2 == Inf)
 			next
 		
-		LRT[i] <- -2*(LL-LLgrp1-LLgrp2)
+		if(continuous){
+			LRT[id[length(id)]] <- -2*(LL-LLgrp1-LLgrp2)
+		}else{
+			LRT[i] <- -2*(LL-LLgrp1-LLgrp2)
+		}
 	}
 	ret <- list(goodness=LRT, direction=dir)
 	
 	return(ret)
 }
 
-rpartCV <- function(data, covars, rpartRes, minsplit, minbucket, numCV){
+rpartCV <- function(data, covars, rpartRes, minsplit, minbucket, numCV, parallel, cores){
 	# Pull out cp info
 	cpTable <- rpartRes$cptable
 	numCPLvls <- nrow(cpTable)
@@ -1741,72 +1729,88 @@ rpartCV <- function(data, covars, rpartRes, minsplit, minbucket, numCV){
 	dropGrps <- sample(dropNums, numSub)
 	
 	errorRate <- vector("list", numCV)
-	subTree <- vector("list", numCV)
-	for(k in 1:numCV){
-		# Get location of data to drop
-		dropLoc <- which(dropGrps == k)
-		
-		# Seperate dropped data
-		subData <- data[-dropLoc,, drop=FALSE]
-		dropData <- data[dropLoc,, drop=FALSE]
-		
-		# Seperate dropped covars
-		subCovs <- covars[-dropLoc,, drop=FALSE]
-		dropCovs <- covars[dropLoc,, drop=FALSE]
-		
-		# Run rpart on smaller data
-		subRpartBase <- DM.Rpart.Base(subData, subCovs, FALSE, minsplit, minbucket)
-		subRpartRes <- subRpartBase$fullTree
-		
-		# Need to be abandance for later code
-		subData <- subData/(rowSums(subData))
-		dropData <- dropData/(rowSums(dropData))
-		
-		# Calculate relative error
-		dist <- NULL
-		subTree[[k]] <- vector("list", numCPLvls)
-		for(i in 1:numCPLvls){
-			subTree[[k]][[i]] <-  rpart::prune(subRpartRes, cp=cpTable[i, 1])
-			pruneSubTree <- subTree[[k]][[i]]
-			subPre <- predict(pruneSubTree, newdata=subCovs, type="vector")
-			dropPre <- predict(pruneSubTree, newdata=dropCovs, type="vector")
-			
-			## 1.a. Distance: new subject to the mean Taxa in the signed Terminal node
-			tempDist <- 0
-			for(j in 1:length(dropPre))
-				tempDist <- tempDist + (dist(rbind(dropData[j,], colMeans(subData[subPre == dropPre[j],]))))^2
-			
-			dist[i] <- tempDist/length(dropPre)
+	if(parallel){
+		cl <- parallel::makeCluster(min(cores, numCV)) 
+		doParallel::registerDoParallel(cl)
+		tryCatch({
+					cvRes <- foreach::foreach(k=1:numCV, .combine=append, .multicombine=FALSE, .inorder=FALSE, .errorhandling="pass", .packages=c("rpart", "HMP")) %dopar%{
+						cvRes <- rpartCVSingle(data, covars, k, cpTable, dropGrps, numCPLvls, minsplit, minbucket)
+						return(list(cvRes))
+					}
+				}, finally = {
+					parallel::stopCluster(cl) # Close the parallel connections
+				}
+		)
+		errorRate <- lapply(cvRes, function(x)x[[1]])
+		subTree <- lapply(cvRes, function(x)x[[2]])
+	}else{
+		errorRate <- vector("list", numCV)
+		subTree <- vector("list", numCV)
+		for(k in 1:numCV){
+			cvRes <- rpartCVSingle(data, covars, k, cpTable, dropGrps, numCPLvls, minsplit, minbucket)
+			errorRate[[k]] <- cvRes[[1]]
+			subTree[[k]] <- cvRes[[2]]
 		}
-		
-		error <- data.frame(DtoM=dist)
-		rownames(error) <- cpTable[,2] + 1
-		errorRate[[k]] <- error
 	}
 	
 	# Calculate the square root of the errors
-	erSqrt <- lapply(errorRate, sqrt)
-	error <- do.call("cbind", erSqrt)
+	error <- sapply(errorRate, sqrt)
 	
-	# Pull out only the distance to the mean
-	loc <- which(colnames(error) == "DtoM")
-	errorDM <- as.matrix(error[,loc])
-	
-	# Calculate CI of DtoM
+	# Calculate CI of MSE
 	ciInfo <- matrix(NA, numCPLvls, 4)
 	for(j in 1:numCPLvls){
-		ciInfo[j, 1] <- mean(errorDM[j,])
-		ciInfo[j, 2:3] <- rpartCI(errorDM[j,], 0.95)
-		ciInfo[j, 4] <- sd(errorDM[j,])/sqrt(ncol(errorDM))
+		ciInfo[j, 1] <- mean(error[j,])
+		ciInfo[j, 2:3] <- rpartCI(error[j,], 0.95)
+		ciInfo[j, 4] <- sd(error[j,])/sqrt(ncol(error))
 	}
 	
 	ciInfo <- cbind(ciInfo, rank(ciInfo[,1]))
-	colnames(ciInfo) <- c("DtoM", "SE", "Lower", "Upper", "Rank")
+	colnames(ciInfo) <- c("MSE", "Lower", "Upper", "SE", "Rank")
 	
 	# Add ci info back into cp table
 	cpTable2 <- cbind(rpartRes$cptable, ciInfo)
 	
-	return(list(subTree=subTree, errorRate=errorRate, ciInfo=cpTable2))
+	return(list(subTree=subTree, errorRate=do.call("cbind", errorRate), ciInfo=cpTable2))
+}
+
+rpartCVSingle <- function(data, covars, cvNum, cpTable, dropGrps, numCPLvls, minsplit, minbucket){
+	# Get location of data to drop
+	dropLoc <- which(dropGrps == cvNum)
+	
+	# Seperate dropped data
+	subData <- data[-dropLoc,, drop=FALSE]
+	dropData <- data[dropLoc,, drop=FALSE]
+	
+	# Seperate dropped covars
+	subCovs <- covars[-dropLoc,, drop=FALSE]
+	dropCovs <- covars[dropLoc,, drop=FALSE]
+	
+	# Run rpart on smaller data
+	subRpartRes <- DM.Rpart.Base(subData, subCovs, FALSE, minsplit, minbucket)$fullTree
+	
+	# Need to be abandance for later code
+	subData <- subData/(rowSums(subData))
+	dropData <- dropData/(rowSums(dropData))
+	
+	# Calculate relative error
+	MSEn <- rep(NA, numCPLvls)
+	subTree <- vector("list", numCPLvls)
+	for(i in 1:numCPLvls){
+		subTree[[i]] <-  rpart::prune(subRpartRes, cp=cpTable[i, 1])
+		pruneSubTree <- subTree[[i]]
+		subPre <- predict(pruneSubTree, newdata=subCovs, type="vector")
+		dropPre <- predict(pruneSubTree, newdata=dropCovs, type="vector")
+		
+		## 1.a. Distance: new subject to the mean Taxa in the signed Terminal node
+		tempDist <- 0
+		for(j in 1:length(dropPre))
+			tempDist <- tempDist + (dist(rbind(dropData[j,], colMeans(subData[subPre == dropPre[j],]))))^2
+		
+		MSEn[i] <- tempDist/length(dropPre)
+	}
+	names(MSEn) <- cpTable[,2] + 1
+	
+	return(list(errorRate=MSEn, subTree=subTree))
 }
 
 rpartCI <- function(vector, interval) {
@@ -2149,8 +2153,73 @@ Xdc.statistics.Hnull.Ha <- function(alphap, group.Nrs, type, est){
 }
 
 
+### ~~~~~~~~~~~~~~~~~~~~~
+### OLD
+### ~~~~~~~~~~~~~~~~~~~~~
+DM.Rpart.Base.Old <- function(data, covars, plot=TRUE, minsplit=1, minbucket=1, cp=0){
+	if(missing(data) || missing(covars))
+		stop("data and/or covars are missing.")
+	
+	# Set the methods to use and call rpart
+	methods <- list(init=rpartInit, eval=rpartEval, split=rpartSplitOld)
+	rpartRes <- rpart::rpart(as.matrix(data) ~., data=covars, method=methods, minsplit=minsplit, minbucket=minbucket, cp=cp)
+	
+	cpInfo <- rpartRes$cptable
+	size <- cpInfo[nrow(cpInfo), 2] + 1
+	
+	# Get split info from best tree
+	splits <- NULL
+	if(size > 1)
+		splits <- rpartCS(rpartRes)
+	
+	# Plot the rpart results
+	if(plot)
+		suppressWarnings(rpart.plot::rpart.plot(rpartRes, type=2, extra=101, box.palette=NA, branch.lty=3, shadow.col="gray", nn=FALSE))
+	
+	return(list(cpTable=cpInfo, fullTree=rpartRes, bestTree=rpartRes, subTree=NULL, errorRate=NULL, size=size, splits=splits))
+}
 
-
+rpartSplitOld <- function(y, wt, x, parms, continuous){
+	# Get initial LL
+	LL <- DM.MoM(y)$loglik
+	
+	# Determine what we are comparing
+	if(continuous){
+		numTests <- length(x) - 1
+		dir <- rep(-1, numTests)
+	}else{
+		uniqX <- sort(unique(x))
+		numTests <- length(uniqX) - 1
+		dir <- uniqX
+	}
+	
+	# Run through every comparison
+	LRT <- rep(0, numTests)
+	for(i in 1:numTests){
+		if(continuous){
+			grp1 <- y[1:i,, drop=FALSE]
+			grp2 <- y[-c(1:i),, drop=FALSE]
+		}else{
+			grp1 <- y[x == uniqX[i],, drop=FALSE]
+			grp2 <- y[x != uniqX[i],, drop=FALSE]
+		}
+		# Skip any 1 subject groups
+		if(nrow(grp1) == 1 || nrow(grp2) == 1)
+			next
+		
+		LLgrp1 <- DM.MoM(grp1)$loglik
+		LLgrp2 <- DM.MoM(grp2)$loglik
+		
+		# Skip any infinite LL comparisons (makes lrt 0)
+		if(LLgrp1 == Inf || LLgrp2 == Inf)
+			next
+		
+		LRT[i] <- -2*(LL-LLgrp1-LLgrp2)
+	}
+	ret <- list(goodness=LRT, direction=dir)
+	
+	return(ret)
+}
 
 
 

@@ -10,6 +10,9 @@ saliva <- read.csv("saliva.csv", row.names=1)
 throat <- read.csv("throat.csv", row.names=1)
 tonsils <- read.csv("tonsils.csv", row.names=1)
 
+dmrp_data <- read.csv("dmrp_data.csv", row.names=1)
+dmrp_covars <- read.csv("dmrp_covars.csv", row.names=1)
+
 
 ### ~~~~~~~~~~~~~~~~~~~~~
 ### MC functions
@@ -328,6 +331,24 @@ Plot.RM.Dotplot <- function(){
 	Plot.RM.Dotplot(group.data, groups, times, FALSE)
 }
 
+Plot.Theta.Test <- function(){
+	\dontrun{
+		data(saliva)
+		data(throat)
+		data(tonsils)
+		
+		### Combine the data sets into a single list
+		group.data <- list(saliva, throat, tonsils)
+		
+		### Get PI using MLE with CI
+		mle <- Est.PI(group.data)$MLE
+		
+		### Plot theta
+		Plot.Theta(mle)
+	}
+}
+
+
 
 ### ~~~~~~~~~~~~~~~~~~~~~
 ### Other functions
@@ -418,18 +439,15 @@ DM.Rpart.Test <- function(){
 	data <- rbind(saliva, throat, tonsils)
 	
 	### For a single rpart tree
-	numCV <- 0
-	numCon <- 0
-	rpartRes <- DM.Rpart(data, covars, numCV=numCV, numCon=numCon)
+	rpartRes <- DM.Rpart(data, covars, numCV=0, numCon=0)
 	
 	\dontrun{
 		### For a cross validated rpart tree
-		numCon <- 0
-		rpartRes <- DM.Rpart(data, covars, numCon=numCon)
+		rpartRes <- DM.Rpart(data, covars, numCV=10, numCon=0)
 		
 		### For a cross validated rpart tree with consensus
-		numCon <- 2 # Note this is set to 2 for speed and should be at least 100
-		rpartRes <- DM.Rpart(data, covars, numCon=numCon)
+		# Note this is set to 2 for speed and should be at least 100
+		rpartRes <- DM.Rpart(data, covars, numCon=2)
 	}
 }
 
@@ -478,8 +496,8 @@ DM.Rpart.CV.Consensus.Test <- function(){
 	### Combine our data into a single object
 	data <- rbind(saliva, throat, tonsils)
 	
-	### This should be at least 100, but we use 1 for speed
-	numCon <- 10
+	### This should be at least 100, but we use 2 for speed
+	numCon <- 2
 	rpartRes <- DM.Rpart.CV.Consensus(data, covars, numCon=numCon)
 }
 
