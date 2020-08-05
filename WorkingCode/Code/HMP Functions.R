@@ -1015,14 +1015,14 @@ formatDataSets <- function(group.data){
 	if(numGroups < 2)
 		stop("At least 2 data sets are required.")
 	
+	# Remove all 0 total read subjects from the data
+	group.data <- lapply(group.data, function(x){x[rowSums(x) > 0,, drop=FALSE]})
+	
 	# Merge all the data together
 	dataNames <- vector("list", numGroups)
 	newData <- NULL
 	for(i in 1:length(group.data)){		
 		tempData <- group.data[[i]]
-		
-		# Remove any all 0 subjects from the data
-		tempData <- tempData[rowSums(tempData) != 0,, drop=FALSE]
 		
 		# Save the current row names
 		dataNames[[i]] <- rownames(tempData)

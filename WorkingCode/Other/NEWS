@@ -1,3 +1,14 @@
+CHANGES IN HMP VERSION 2.1
+
+CHANGES
+
+* 
+
+BUG FIXES
+
+* Fixed formatDataSets function to correctly remove samples with 0 total reads
+
+
 CHANGES IN HMP VERSION 2.0
 
 CHANGES
