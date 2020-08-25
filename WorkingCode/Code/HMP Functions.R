@@ -442,7 +442,7 @@ Test.Paired <- function(group.data, numPerms=1000, parallel=FALSE, cores=3){
 	return(pval)
 }
 
-DM.Rpart <- function(data, covars, plot=TRUE, minsplit=1, minbucket=1, cp=0, numCV=10, numCon=100, parallel=FALSE, cores=3, use1SE=FALSE, lowerSE=TRUE){
+DM.Rpart <- function(data, covars, plot=TRUE, minsplit=1, minbucket=1, cp=0, numCV=10, numCon=0, parallel=FALSE, cores=3, use1SE=FALSE, lowerSE=TRUE){
 	if(missing(data) || missing(covars))
 		stop("data and/or covars are missing.")
 	
@@ -477,7 +477,7 @@ DM.Rpart.Base <- function(data, covars, plot=TRUE, minsplit=1, minbucket=1, cp=0
 	if(plot)
 		suppressWarnings(rpart.plot::rpart.plot(rpartRes, type=2, extra=101, box.palette=NA, branch.lty=3, shadow.col="gray", nn=FALSE))
 	
-	return(list(cpTable=cpInfo, fullTree=rpartRes, bestTree=rpartRes, subTree=NULL, errorRate=NULL, size=size, splits=splits))
+	return(list(cpTable=cpInfo, fullTree=rpartRes, bestTree=rpartRes, errorRate=NULL, size=size, splits=splits))
 }
 
 DM.Rpart.CV <- function(data, covars, plot=TRUE, minsplit=1, minbucket=1, cp=0, numCV=10, parallel=FALSE, cores=3, use1SE=FALSE, lowerSE=TRUE){
@@ -505,12 +505,12 @@ DM.Rpart.CV <- function(data, covars, plot=TRUE, minsplit=1, minbucket=1, cp=0, 
 	minMSE <- min(ciInfo$MSE)
 	lowestMSELoc <- which(ciInfo$MSE == minMSE)[1]
 	
+	# Find which trees are within 1 SE of the lowest mse tree
+	cutoffU <- ciInfo$MSE[lowestMSELoc] + ciInfo$SE[lowestMSELoc]
+	cutoffL <- ciInfo$MSE[lowestMSELoc] - ciInfo$SE[lowestMSELoc]
+	ciInfo$within1SE <- ifelse(ciInfo$MSE <= cutoffU & ciInfo$MSE >= cutoffL, 1, 0)   
+	
 	if(use1SE){	
-		# Find which trees are within 1 SE of the lowest mse tree
-		cutoffU <- ciInfo$MSE[lowestMSELoc] + ciInfo$SE[lowestMSELoc]
-		cutoffL <- ciInfo$MSE[lowestMSELoc] - ciInfo$SE[lowestMSELoc]
-		ciInfo$within1SE <- ifelse(ciInfo$MSE <= cutoffU & ciInfo$MSE >= cutoffL, 1, 0)   
-		
 		# Find the smallest/biggest tree within 1 SE
 		within <- which(ciInfo$within1SE == 1)
 		if(lowerSE){
@@ -534,7 +534,7 @@ DM.Rpart.CV <- function(data, covars, plot=TRUE, minsplit=1, minbucket=1, cp=0, 
 	if(plot)
 		suppressWarnings(rpart.plot::rpart.plot(best, type=2, extra=101, box.palette=NA, branch.lty=3, shadow.col="gray", nn=FALSE))
 	
-	return(list(cpTable=ciInfo, fullTree=rpartRes, bestTree=best, subTree=cvRes$subTree, errorRate=cvRes$errorRate, size=size, splits=splits))
+	return(list(cpTable=ciInfo, fullTree=rpartRes, bestTree=best, errorRate=cvRes$errorRate, size=size, splits=splits))
 }
 
 DM.Rpart.CV.Consensus <- function(data, covars, plot=TRUE, minsplit=1, minbucket=1, cp=0, numCV=10, numCon=100, parallel=FALSE, cores=3, use1SE=FALSE, lowerSE=TRUE){
@@ -591,7 +591,7 @@ DM.Rpart.CV.Consensus <- function(data, covars, plot=TRUE, minsplit=1, minbucket
 	if(plot)
 		suppressWarnings(rpart.plot::rpart.plot(best, type=2, extra=101, box.palette=NA, branch.lty=3, shadow.col="gray", nn=FALSE))
 	
-	return(list(cpTable=ciInfo, fullTree=results[[1]]$fullTree, bestTree=best, subTree=NULL, errorRate=NULL, size=size, splits=splits))
+	return(list(cpTable=ciInfo, fullTree=results[[1]]$fullTree, bestTree=best, errorRate=NULL, size=size, splits=splits))
 }
 
 Gen.Alg <- function(data, covars, iters=50, popSize=200, earlyStop=0, dataDist="euclidean", covarDist="gower", 
