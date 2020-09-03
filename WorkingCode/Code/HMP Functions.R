@@ -1001,6 +1001,62 @@ Plot.Theta <- function(estPi, main="Theta by Group"){
 		lines(c(thetaci[i, 4], thetaci[i, 5]), c(i, i))
 }
 
+Plot.MDS.wPI <- function(group.data, pi, main="Group MDS", retCords=FALSE){
+	if(missing(group.data))
+		stop("group.data is missing.")
+	
+	numGroups <- length(group.data)
+	
+	# Make sure we have the same columns
+	taxaCounts <- sapply(group.data, ncol)
+	numTaxa	<- taxaCounts[1]
+	if(any(taxaCounts != numTaxa)){
+		warning("Group columns do not match, running formatDataSets.")
+		group.data <- formatDataSets(group.data)
+	}
+	
+	# Make sure we have group names
+	if(is.null(names(group.data))){
+		grpNames <- paste("Data Set", 1:numGroups)
+	}else{
+		grpNames <- names(group.data)
+	}
+	
+	# Merge all the data sets together
+	mData <- do.call("rbind", group.data)
+	numSubs <- nrow(mData)
+	
+	# Get the pi data, label, sort and combine
+	numTaxa <- ncol(mData)
+	piData <- matrix(pi$params$PI, length(group.data), numTaxa)
+	colnames(piData) <- pi$params$Taxa[1:numTaxa]
+	rownames(piData) <- unique(pi$params$Group)
+	piData <- piData[, colnames(mData)]
+	mData <- rbind(mData, piData)
+	
+	# Get their mds location 
+	loc <- getBC(mData)
+	
+	# Set color
+	availCols <- rainbow(numGroups)
+	cols <- NULL
+	for(i in 1:numGroups)
+		cols <- c(cols, rep(availCols[i], nrow(group.data[[i]])))
+	cols <- c(cols, rainbow(numGroups))
+	
+	# Set size and shape
+	pch <- rep(16, numSubs)
+	pch <- c(pch, rep(17, numGroups))
+	cex <- rep(1, numSubs)
+	cex <- c(cex, rep(2, numGroups))
+	
+	# Plot MDS
+	plot(loc, pch=pch, ylab="MDS 2", xlab="MDS 1", col=cols, main=main, cex=cex)
+	legend("topright", legend=grpNames, pch=15, col=availCols)
+	
+	if(retCords)
+		return(loc)
+}
 
 
 ### ~~~~~~~~~~~~~~~~~~~~~
