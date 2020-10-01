@@ -1857,8 +1857,11 @@ rpartCVSingle <- function(data, covars, cvNum, cpTable, dropGrps, numCPLvls, min
 		
 		## 1.a. Distance: new subject to the mean Taxa in the signed Terminal node
 		tempDist <- 0
-		for(j in 1:length(dropPre))
-			tempDist <- tempDist + (dist(rbind(dropData[j,], colMeans(subData[subPre == dropPre[j],]))))^2
+		for(j in 1:length(dropPre)){
+			tempVal <- (dist(rbind(dropData[j,, drop=FALSE], colMeans(subData[subPre == dropPre[j],, drop=FALSE]))))^2
+			if(!is.na(tempVal))
+				tempDist <- tempDist + tempVal
+		}
 		
 		MSEn[i] <- tempDist/length(dropPre)
 	}
